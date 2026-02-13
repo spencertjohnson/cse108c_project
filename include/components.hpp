@@ -6,6 +6,12 @@ struct Block {
     int id;
     std::string data;
     bool is_dummy;
+
+    Block()
+        : id(-1), data(""), is_dummy(true) {}
+
+    Block(int id, const std::string& data)
+        : id(id), data(data), is_dummy(false) {}
 };
 
 class Bucket {
