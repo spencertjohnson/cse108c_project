@@ -11,13 +11,14 @@ struct Block {
     Block()
         : id(-1), data(""), is_dummy(true) {}
 
-    Block(int id, const std::string& data)
-        : id(id), data(data), is_dummy(false) {}
+    Block(int id_, const std::string& data_) : id(id_), data(data_), is_dummy(false) {}
 };
 
 class Bucket {
 public:
     std::vector<Block> blocks;
+
+    Bucket() = default;
 
     Bucket(int Z) {
         blocks.resize(Z);
