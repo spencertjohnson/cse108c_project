@@ -27,7 +27,7 @@ public:
         blocks.resize(Z);
         for (int i = 0; i < Z; ++i) {
             blocks[i].id = -1; // -1 indicates a dummy block
-            std::memset(blocks[i].data, 0, BLOCK_SIZE); // empty data`
+            std::memset(blocks[i].data, 0, BLOCK_SIZE);
             blocks[i].is_dummy = true;
         }
     }

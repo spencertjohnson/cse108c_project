@@ -86,10 +86,35 @@ void PathORAM::print_path_to_leaf(int leaf) const{
 }
 
 // TODO: implement access. For now just a stub to test structure.
+// Step 1: remap block in position map
+// Step 2: read path
+// Step 3: update block
+// Step 4: write path
 
 void PathORAM::access(int block_id, const std::string& data, bool is_write) {
     (void)block_id; (void)data; (void)is_write;
 }
+
+void PathORAM::read_path(int leaf) {
+    std::vector<int> path = get_path(leaf);
+
+    for (int node_idx : path) {
+        Bucket& bucket = tree[node_idx];
+
+        for (int i = 0; i < Z; i++) {
+            Block& block = bucket.blocks[i];
+            if (!block.is_dummy) {
+                stash.push_back(block);
+
+                block.id = -1;
+                std::memset(block.data, 0, BLOCK_SIZE);
+                block.is_dummy = true;
+            }
+        }
+    }
+}
+
+
 
     // TODO: implement read_path
     // Read all buckets from root to leaf into stash
@@ -98,8 +123,29 @@ void PathORAM::access(int block_id, const std::string& data, bool is_write) {
     // in buckets along the path to their assigned leaf
     // TODO: implement remap
     // Assign accessed block a new random leaf in position map
+    // TODO: update stash;
+    
+    void PathORAM::remap_block(int block_id){
+        position_map[block_id] = random_leaf();
+    }
+
+    int PathORAM::stash_update(int block_id, const char* data, bool is_write){
+        int idx = -1;
+        for (int i = 0; i < (int)stash.size(); ++i){
+            if (!stash[i].is_dummy && stash[i].id == block_id){
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0){
+            stash.push_back(Block(block_id, ""));
+            idx = (int)stash.size()
+        }
+    }
 
 
+
+//later tho 
 // TODO encrypt blocks when given to server and decrypt when read
 // TODO set stash size limit
 // TODO add unit tests
