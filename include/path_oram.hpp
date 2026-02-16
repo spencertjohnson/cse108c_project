@@ -4,6 +4,8 @@
 #include <string>
 #include "components.hpp"
 
+// TODO Clean up comments, make sure we aren't overcommenting
+
 class PathORAM {
 private:
     int N; // Number of blocks

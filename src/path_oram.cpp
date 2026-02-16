@@ -77,11 +77,6 @@ void PathORAM::print_tree_structure() const {
     }
 }
 
-void PathORAM::access(int block_id, const std::string& data, bool is_write) {
-    (void)block_id; (void)data; (void)is_write;
-    // next step: read_path -> stash -> write_path
-}
-
 void PathORAM::print_path_to_leaf(int leaf) const{
     auto path = get_path(leaf);
     std::cout << "leaf " << leaf << ": ";
@@ -89,3 +84,22 @@ void PathORAM::print_path_to_leaf(int leaf) const{
         std::cout << path[i] << (i + 1 == (int)path.size() ? "\n" : " -> ");
     }
 }
+
+// TODO: implement access. For now just a stub to test structure.
+
+void PathORAM::access(int block_id, const std::string& data, bool is_write) {
+    (void)block_id; (void)data; (void)is_write;
+}
+
+    // TODO: implement read_path
+    // Read all buckets from root to leaf into stash
+    // TODO: implement write_path
+    // Write blocks from stash back to path, ensuring blocks are placed greedily
+    // in buckets along the path to their assigned leaf
+    // TODO: implement remap
+    // Assign accessed block a new random leaf in position map
+
+
+// TODO encrypt blocks when given to server and decrypt when read
+// TODO set stash size limit
+// TODO add unit tests
