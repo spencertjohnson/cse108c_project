@@ -30,6 +30,7 @@ public:
 
     void access(int block_id, const char* data = "", bool is_write = false);
     void read_path(int leaf);
+    bool bucket_on_path(int bucket_node, int leaf) const;
     void write_path(std::vector<int> path);
     void remap_block(int block_id);
     int stash_update(int block_id, const char* data);

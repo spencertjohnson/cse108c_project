@@ -11,6 +11,7 @@ static int next_pow2(int x) {
     return p;
 }
 
+
 PathORAM::PathORAM(int N_in, int Z_in) : N(N_in), Z(Z_in) {
     if (N <= 0) throw std::invalid_argument("N must be > 0");
     if (Z <= 0) throw std::invalid_argument("Z must be > 0");
@@ -34,11 +35,13 @@ PathORAM::PathORAM(int N_in, int Z_in) : N(N_in), Z(Z_in) {
     for (int id = 0; id < N; id++) position_map[id] = random_leaf();
 }
 
+
 int PathORAM::random_leaf() const {
     static thread_local std::mt19937 rng{std::random_device{}()};
     std::uniform_int_distribution<int> dist(0, num_leaves - 1);
     return dist(rng);
 }
+
 
 std::vector<int> PathORAM::get_path(int leaf) const {
     if (leaf < 0 || leaf >= num_leaves)
@@ -57,6 +60,7 @@ std::vector<int> PathORAM::get_path(int leaf) const {
     std::reverse(path.begin(), path.end()); // root->leaf
     return path;
 }
+
 
 void PathORAM::print_tree_structure() const {
     std::cout << "PathORAM N=" << N
@@ -77,6 +81,7 @@ void PathORAM::print_tree_structure() const {
     }
 }
 
+
 void PathORAM::print_path_to_leaf(int leaf) const{
     auto path = get_path(leaf);
     std::cout << "leaf " << leaf << ": ";
@@ -85,15 +90,28 @@ void PathORAM::print_path_to_leaf(int leaf) const{
     }
 }
 
-// TODO: implement access. For now just a stub to test structure.
-// Step 1: remap block in position map
-// Step 2: read path
-// Step 3: update block
-// Step 4: write path
 
 void PathORAM::access(int block_id, const char* data, bool is_write) {
     (void)block_id; (void)data; (void)is_write;
+
+    int x = position_map[block_id];
+    
+    remap_block(block_id);
+
+    read_path(x);
+
+    if (is_write){
+        stash_update(block_id, data);
+    }
+
+    write_path(get_path(x));
 }
+
+
+// -------------------------------------------------------------------
+// Access Helpers
+// -------------------------------------------------------------------
+
 
 void PathORAM::read_path(int leaf) {
     std::vector<int> path = get_path(leaf);
@@ -114,17 +132,53 @@ void PathORAM::read_path(int leaf) {
     }
 }
 
-void PathORAM:: write_path(std::vector<int> path) {
 
+bool PathORAM:: bucket_on_path(int bucket_node, int leaf) const {
+    auto path = get_path(leaf);
+    return std::find(path.begin(), path.end(), bucket_node) != path.end();
 }
 
-    // TODO: implement write_path
-    // Write blocks from stash back to path, ensuring blocks are placed greedily
-    // in buckets along the path to their assigned leaf
-    // TODO: implement remap
-    // Assign accessed block a new random leaf in position map
-    // TODO: update stash;
+
+void PathORAM:: write_path(std::vector<int> path) {
+    for (int level = (int)path.size() - 1; level >= 0; --level) {
+        int node_idx = path[level];
+        Bucket& bucket = tree[node_idx];
+
+        int filled = 0;
+
+        for (size_t i = 0; i < stash.size() && filled < Z; ) {
+            Block& block = stash[i];
+
+            if (block.is_dummy) {
+                ++i;
+                continue;
+            }
+
+
+            int assigned_leaf = position_map[block.id];
+
+            if (bucket_on_path(node_idx, assigned_leaf)) {
+                bucket.blocks[filled] = block;
+
+                stash[i] = stash.back();
+                stash.pop_back();
+                filled++;
+            }
+            else {
+                ++i;
+            }
+        }
+        while (filled < Z) {
+            bucket.blocks[filled].id = 0;
+            std::memset(bucket.blocks[filled].data, 0, BLOCK_SIZE);
+            bucket.blocks[filled].is_dummy = true;
+            filled++;
+        }
+    }
+
+}
     
+
 void PathORAM::remap_block(int block_id){
     position_map[block_id] = random_leaf();
 }
@@ -149,6 +203,23 @@ int PathORAM::stash_update(int block_id, const char* data) {
     return idx;
 }
 
+
+static void encrypt_block(Block &b){
+    if (b.is_dummy) return;
+
+    const uint64_t key = 0xC0FFEE1234ABCDEFULL;
+
+    uint64_t s = key ^ (uint64_t) (uint32_t)b.id;
+
+    for (int i = 0; i < BLOCK_SIZE; ++i){
+        s ^= s >> 12;
+        s ^= s << 25;
+        s ^= s >> 27;
+        uint8_t k = (uint8_t) ((s * 2685821657726338717ULL) & 0xFF);
+
+        b.data[i] ^= (char)k;
+    }
+}
 
 
 //later tho 
