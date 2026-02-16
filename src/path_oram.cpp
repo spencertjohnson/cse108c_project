@@ -183,6 +183,7 @@ void PathORAM::remap_block(int block_id){
     position_map[block_id] = random_leaf();
 }
 
+
 int PathORAM::stash_update(int block_id, const char* data) {
     int idx = -1;
     for (size_t i = 0; i < stash.size(); ++i){

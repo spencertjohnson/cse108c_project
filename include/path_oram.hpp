@@ -37,4 +37,5 @@ public:
 
     void print_tree_structure() const;
     void print_path_to_leaf(int leaf) const;
+    static void encrypt_block(Block &b);
 };
