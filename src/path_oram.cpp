@@ -91,7 +91,7 @@ void PathORAM::print_path_to_leaf(int leaf) const{
 // Step 3: update block
 // Step 4: write path
 
-void PathORAM::access(int block_id, const std::string& data, bool is_write) {
+void PathORAM::access(int block_id, const char* data, bool is_write) {
     (void)block_id; (void)data; (void)is_write;
 }
 
@@ -114,10 +114,10 @@ void PathORAM::read_path(int leaf) {
     }
 }
 
+void PathORAM:: write_path(std::vector<int> path) {
 
+}
 
-    // TODO: implement read_path
-    // Read all buckets from root to leaf into stash
     // TODO: implement write_path
     // Write blocks from stash back to path, ensuring blocks are placed greedily
     // in buckets along the path to their assigned leaf
@@ -125,23 +125,29 @@ void PathORAM::read_path(int leaf) {
     // Assign accessed block a new random leaf in position map
     // TODO: update stash;
     
-    void PathORAM::remap_block(int block_id){
-        position_map[block_id] = random_leaf();
+void PathORAM::remap_block(int block_id){
+    position_map[block_id] = random_leaf();
+}
+
+int PathORAM::stash_update(int block_id, const char* data) {
+    int idx = -1;
+    for (size_t i = 0; i < stash.size(); ++i){
+        if (stash[i].id == block_id){
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0){
+        stash.push_back(Block(block_id, ""));
+        idx = (int)stash.size() - 1;
     }
 
-    int PathORAM::stash_update(int block_id, const char* data, bool is_write){
-        int idx = -1;
-        for (int i = 0; i < (int)stash.size(); ++i){
-            if (!stash[i].is_dummy && stash[i].id == block_id){
-                idx = i;
-                break;
-            }
-        }
-        if (idx < 0){
-            stash.push_back(Block(block_id, ""));
-            idx = (int)stash.size()
-        }
-    }
+    std::strncpy(stash[idx].data, data, BLOCK_SIZE - 1);
+    stash[idx].data[BLOCK_SIZE - 1] = '\0';
+    stash[idx].is_dummy = false;
+
+    return idx;
+}
 
 
 
