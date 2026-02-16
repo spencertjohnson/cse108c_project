@@ -10,10 +10,13 @@ struct Block {
     bool is_dummy;
 
     Block()
-        : id(-1), data(""), is_dummy(true) {}
+        : id(-1), is_dummy(true) {
+            std::memset(data, 0, BLOCK_SIZE);
+        }
 
     Block(int id_, const char* data_) : id(id_), is_dummy(false) {
-        std::copy(data_, data_ + BLOCK_SIZE, data);
+        std::strncpy(data, data_, BLOCK_SIZE - 1);
+        data[BLOCK_SIZE - 1] = '\0';
     }
 };
 

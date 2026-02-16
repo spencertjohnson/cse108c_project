@@ -28,7 +28,7 @@ private:
 public:
     PathORAM(int N, int Z = 4);
 
-    void access(int block_id, const char* data = "", bool is_write = false);
+    std::string access(int block_id, const char* data = "", bool is_write = false);
     void read_path(int leaf);
     bool bucket_on_path(int bucket_node, int leaf) const;
     void write_path(std::vector<int> path);
@@ -37,5 +37,6 @@ public:
 
     void print_tree_structure() const;
     void print_path_to_leaf(int leaf) const;
-    static void encrypt_block(Block &b);
+    void encrypt_block(Block &b);
+    void decrypt_block(Block &b);
 };

@@ -91,7 +91,7 @@ void PathORAM::print_path_to_leaf(int leaf) const{
 }
 
 
-void PathORAM::access(int block_id, const char* data, bool is_write) {
+std::string PathORAM::access(int block_id, const char* data = "", bool is_write = false) {
     (void)block_id; (void)data; (void)is_write;
 
     int x = position_map[block_id];
@@ -102,6 +102,13 @@ void PathORAM::access(int block_id, const char* data, bool is_write) {
 
     if (is_write){
         stash_update(block_id, data);
+    }
+    else {
+        for (const Block& b : stash){
+            if (b.id == block_id && !b.is_dummy){
+                return std::string(b.data);
+            }
+        }
     }
 
     write_path(get_path(x));
@@ -127,6 +134,15 @@ void PathORAM::read_path(int leaf) {
                 block.id = -1;
                 std::memset(block.data, 0, BLOCK_SIZE);
                 block.is_dummy = true;
+
+                if (!block.is_dummy){ //decrpyt the path 
+                    decrypt_block(block);
+                    stash.push_back(block);
+                    
+                    block.id = -1;
+                    std::memset(block.data, 0, BLOCK_SIZE);
+                    block.is_dummy = true;
+                }
             }
         }
     }
@@ -158,6 +174,7 @@ void PathORAM:: write_path(std::vector<int> path) {
             int assigned_leaf = position_map[block.id];
 
             if (bucket_on_path(node_idx, assigned_leaf)) {
+                encrypt_block(block);
                 bucket.blocks[filled] = block;
 
                 stash[i] = stash.back();
@@ -169,9 +186,9 @@ void PathORAM:: write_path(std::vector<int> path) {
             }
         }
         while (filled < Z) {
-            bucket.blocks[filled].id = 0;
-            std::memset(bucket.blocks[filled].data, 0, BLOCK_SIZE);
-            bucket.blocks[filled].is_dummy = true;
+            Block dummy;
+            encrypt_block(dummy);
+            bucket.blocks[filled] = dummy;
             filled++;
         }
     }
@@ -186,13 +203,18 @@ void PathORAM::remap_block(int block_id){
 
 int PathORAM::stash_update(int block_id, const char* data) {
     int idx = -1;
+
     for (size_t i = 0; i < stash.size(); ++i){
         if (stash[i].id == block_id){
             idx = i;
             break;
         }
     }
+
     if (idx < 0){
+        if (position_map.find(block_id) == position_map.end()){
+            position_map[block_id] = random_leaf();
+        }
         stash.push_back(Block(block_id, ""));
         idx = (int)stash.size() - 1;
     }
@@ -205,23 +227,27 @@ int PathORAM::stash_update(int block_id, const char* data) {
 }
 
 
-static void encrypt_block(Block &b){
+static void encrypt_block(Block &b) {
     if (b.is_dummy) return;
 
     const uint64_t key = 0xC0FFEE1234ABCDEFULL;
 
-    uint64_t s = key ^ (uint64_t) (uint32_t)b.id;
+        uint64_t s = key ^ (uint64_t) (uint32_t)b.id;
 
-    for (int i = 0; i < BLOCK_SIZE; ++i){
-        s ^= s >> 12;
-        s ^= s << 25;
-        s ^= s >> 27;
-        uint8_t k = (uint8_t) ((s * 2685821657726338717ULL) & 0xFF);
-
-        b.data[i] ^= (char)k;
-    }
+        for (int i = 0; i < BLOCK_SIZE; ++i){
+                s ^= s >> 12;
+                s ^= s << 25;
+                s ^= s >> 27;
+                uint8_t k = (uint8_t) ((s * 2685821657726338717ULL) & 0xFF);
+                
+                b.data[i] ^= (char)k;
+            }
 }
 
+
+static void decrypt_block(Block &b){
+    encrypt_block(b);
+}
 
 //later tho 
 // TODO encrypt blocks when given to server and decrypt when read
