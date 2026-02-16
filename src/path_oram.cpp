@@ -91,7 +91,7 @@ void PathORAM::print_path_to_leaf(int leaf) const{
 }
 
 
-std::string PathORAM::access(int block_id, const char* data = "", bool is_write = false) {
+std::string PathORAM::access(int block_id, const char* data, bool is_write) {
     (void)block_id; (void)data; (void)is_write;
 
     int x = position_map[block_id];
@@ -112,6 +112,7 @@ std::string PathORAM::access(int block_id, const char* data = "", bool is_write 
     }
 
     write_path(get_path(x));
+    return "";
 }
 
 
@@ -205,7 +206,7 @@ int PathORAM::stash_update(int block_id, const char* data) {
     int idx = -1;
 
     for (size_t i = 0; i < stash.size(); ++i){
-        if (stash[i].id == block_id){
+        if (stash[i].is_dummy && stash[i].id == block_id){
             idx = i;
             break;
         }
@@ -215,7 +216,11 @@ int PathORAM::stash_update(int block_id, const char* data) {
         if (position_map.find(block_id) == position_map.end()){
             position_map[block_id] = random_leaf();
         }
-        stash.push_back(Block(block_id, ""));
+        Block nb;
+        nb.id = block_id;
+        nb.is_dummy = false;
+        std::memset(nb.data, 0, BLOCK_SIZE);
+        stash.push_back(nb);
         idx = (int)stash.size() - 1;
     }
 
@@ -227,29 +232,21 @@ int PathORAM::stash_update(int block_id, const char* data) {
 }
 
 
-static void encrypt_block(Block &b) {
+void PathORAM::encrypt_block(Block &b){
     if (b.is_dummy) return;
 
     const uint64_t key = 0xC0FFEE1234ABCDEFULL;
-
-        uint64_t s = key ^ (uint64_t) (uint32_t)b.id;
-
-        for (int i = 0; i < BLOCK_SIZE; ++i){
-                s ^= s >> 12;
-                s ^= s << 25;
-                s ^= s >> 27;
-                uint8_t k = (uint8_t) ((s * 2685821657726338717ULL) & 0xFF);
-                
-                b.data[i] ^= (char)k;
-            }
+    uint64_t s = key ^ (uint64_t) (uint32_t) b.id;
+    
+    for (int i = 0; i < BLOCK_SIZE; ++i){
+        s ^= s >> 12;
+        s ^= s << 25;
+        s ^= s >> 27;
+        uint8_t k = (uint8_t)((s * 2685821657726338717ULL) & 0xFF);
+        b.data[i] ^= (char)k;
+    }
 }
 
-
-static void decrypt_block(Block &b){
+void PathORAM::decrypt_block(Block &b){
     encrypt_block(b);
 }
-
-//later tho 
-// TODO encrypt blocks when given to server and decrypt when read
-// TODO set stash size limit
-// TODO add unit tests
