@@ -9,7 +9,7 @@ int main () {
     oram.access(7, "world", true);
 
     std::string a = oram.access(3, "", false);
-    std::string b = oram.access(7, "", true);
+    std::string b = oram.access(7, "", false);
 
     std::cout << "read(3) = " << a << "\n";
     std::cout << "read(7) = " << b << "\n";

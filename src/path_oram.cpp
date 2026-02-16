@@ -72,7 +72,11 @@ void PathORAM::print_tree_structure() const {
 
     // print example paths
     int show = std::min(num_leaves, 4);
-    for (int leaf = 0; leaf < show; leaf++) {
+    int start = 1;
+
+    for (int k = 0; k < show; k++) {
+        int leaf = start + k;
+        if (leaf >= num_leaves)break;
         auto p = get_path(leaf);
         std::cout << "leaf " << leaf << ": ";
         for (int i = 0; i < (int)p.size(); i++) {
@@ -97,22 +101,23 @@ std::string PathORAM::access(int block_id, const char* data, bool is_write) {
     int x = position_map[block_id];
     
     remap_block(block_id);
-
     read_path(x);
+    
+    std::string result = "";
 
     if (is_write){
         stash_update(block_id, data);
-    }
-    else {
+    } else {
         for (const Block& b : stash){
             if (b.id == block_id && !b.is_dummy){
                 return std::string(b.data);
+                break;
             }
         }
     }
 
     write_path(get_path(x));
-    return "";
+    return result;
 }
 
 
@@ -129,12 +134,6 @@ void PathORAM::read_path(int leaf) {
 
         for (int i = 0; i < Z; i++) {
             Block& block = bucket.blocks[i];
-            if (!block.is_dummy) {
-                stash.push_back(block);
-
-                block.id = -1;
-                std::memset(block.data, 0, BLOCK_SIZE);
-                block.is_dummy = true;
 
                 if (!block.is_dummy){ //decrpyt the path 
                     decrypt_block(block);
@@ -146,7 +145,6 @@ void PathORAM::read_path(int leaf) {
                 }
             }
         }
-    }
 }
 
 
@@ -206,7 +204,7 @@ int PathORAM::stash_update(int block_id, const char* data) {
     int idx = -1;
 
     for (size_t i = 0; i < stash.size(); ++i){
-        if (stash[i].is_dummy && stash[i].id == block_id){
+        if (!stash[i].is_dummy && stash[i].id == block_id){
             idx = i;
             break;
         }
@@ -238,7 +236,7 @@ void PathORAM::encrypt_block(Block &b){
     const uint64_t key = 0xC0FFEE1234ABCDEFULL;
     uint64_t s = key ^ (uint64_t) (uint32_t) b.id;
     
-    for (int i = 0; i < BLOCK_SIZE; ++i){
+    for (int i = 1; i < BLOCK_SIZE; ++i){
         s ^= s >> 12;
         s ^= s << 25;
         s ^= s >> 27;
