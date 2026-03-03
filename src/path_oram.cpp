@@ -117,7 +117,7 @@ std::string PathORAM::access(int block_id, const char* data, bool is_write) {
     }
 
     write_path(get_path(x));
-    return result;
+    return std::string(data);
 }
 
 
