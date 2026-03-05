@@ -206,7 +206,6 @@ int PathORAM::stash_update(int block_id, const char* data) {
 
     if (idx < 0) {
         // Block not yet in stash — create a new entry.
-        // position_map is already set by remap_block() before access() calls us.
         Block nb;
         nb.id = block_id;
         nb.is_dummy = false;
@@ -229,7 +228,7 @@ void PathORAM::encrypt_block(Block &b){
     const uint64_t key = 0xC0FFEE1234ABCDEFULL;
     uint64_t s = key ^ (uint64_t) (uint32_t) b.id;
     
-    for (int i = 0; i < BLOCK_SIZE; ++i){
+    for (int i = 0; i < BLOCK_SIZE; ++i) {
         s ^= s >> 12;
         s ^= s << 25;
         s ^= s >> 27;
