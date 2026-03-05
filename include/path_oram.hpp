@@ -36,6 +36,10 @@ public:
 
     std::string access(int block_id, const char* data = "", bool is_write = false);
 
+    int stash_size() const { return (int)stash.size(); }
+    int get_leaf(int block_id) const { return position_map.at(block_id); }
+    int num_leaves_count() const { return num_leaves; }
+
     void print_tree_structure() const;
     void print_path_to_leaf(int leaf) const;
     static void encrypt_block(Block &b);
