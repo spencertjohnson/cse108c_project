@@ -1,37 +1,28 @@
 #include "path_oram.hpp"
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <random>
 #include <stdexcept>
-
-
-static int next_pow2(int x) {
-    int p = 1;
-    while (p < x) p <<= 1;
-    return p;
-}
 
 
 PathORAM::PathORAM(int N_in, int Z_in) : N(N_in), Z(Z_in) {
     if (N <= 0) throw std::invalid_argument("N must be > 0");
     if (Z <= 0) throw std::invalid_argument("Z must be > 0");
 
-    // simplest: leaves >= N (power of two)
-    num_leaves = next_pow2(N);
-    num_nodes  = 2 * num_leaves - 1;
+    // L = tree height = ceil(log2(N)), giving 2^L leaves >= N
+    L = (N > 1) ? (int)ceil(log2((double)N)) : 1;
 
-    // derive L (height in nodes along a path). For num_leaves=8 => L=4 (root + 3 edges)
-    // We'll compute it by counting levels.
-    L = 0;
-    for (int x = num_leaves; x > 0; x >>= 1) L++;  // log2(num_leaves)+1
+    // Use bit-shift for exact integer 2^L (avoids floating-point rounding in pow())
+    num_leaves = 1 << L;
 
-    // Build the tree: each bucket needs Z slots
-    tree.clear();
-    // tree.reserve(num_nodes);
-    tree.resize(num_nodes + 1, Bucket(Z));
-    // for (int i = 1; i < num_nodes; i++) tree.emplace_back(Z);
+    // Total nodes in a 1-indexed binary heap: 2*num_leaves - 1
+    num_nodes = 2 * num_leaves - 1;
 
-    // init positio map
+    // Build the tree: each bucket holds Z block slots (1-indexed, index 0 unused)
+    tree.assign(num_nodes + 1, Bucket(Z));
+
+    // Initialise position map: assign every block a random starting leaf
     for (int id = 0; id < N; id++) position_map[id] = random_leaf();
 }
 
@@ -48,13 +39,11 @@ std::vector<int> PathORAM::get_path(int leaf) const {
         throw std::out_of_range("leaf out of range");
 
     // leaf node index in heap array
-    // int node = (num_leaves - 1) + leaf;  previous 0-based indexing switched to 1-based
     int node = num_leaves + leaf;
 
     std::vector<int> path;
     while (node >= 1) {
         path.push_back(node);
-        // node = (node - 1) / 2;  previous 0-based indexing switched to 1-based
         node = node / 2;
     }
     std::reverse(path.begin(), path.end()); // root->leaf
@@ -96,28 +85,29 @@ void PathORAM::print_path_to_leaf(int leaf) const{
 
 
 std::string PathORAM::access(int block_id, const char* data, bool is_write) {
-    (void)block_id; (void)data; (void)is_write;
-
+    // 1. Look up (and then remap) the block's current leaf
     int x = position_map[block_id];
-    
     remap_block(block_id);
-    read_path(x);
-    
-    std::string result = "";
 
-    if (is_write){
+    // 2. Read the entire path into the stash
+    read_path(x);
+
+    // 3. Perform the requested operation on the stash
+    std::string result = "";
+    if (is_write) {
         stash_update(block_id, data);
     } else {
-        for (const Block& b : stash){
-            if (b.id == block_id && !b.is_dummy){
-                return std::string(b.data);
+        for (const Block& b : stash) {
+            if (b.id == block_id && !b.is_dummy) {
+                result = std::string(b.data);
                 break;
             }
         }
     }
 
+    // 4. Write the path back — must always happen (read or write)
     write_path(get_path(x));
-    return std::string(data);
+    return result;
 }
 
 
@@ -148,13 +138,17 @@ void PathORAM::read_path(int leaf) {
 }
 
 
-bool PathORAM:: bucket_on_path(int bucket_node, int leaf) const {
-    auto path = get_path(leaf);
-    return std::find(path.begin(), path.end(), bucket_node) != path.end();
+bool PathORAM::bucket_on_path(int bucket_node, int leaf) const {
+    // O(1): bucket b is on the path to leaf x iff the leaf's ancestor at
+    // the same depth as b equals b.  Depth of b = floor(log2(b)) in a
+    // 1-indexed heap.  Shifting (num_leaves + leaf) right by (L - depth)
+    // gives that ancestor.
+    int depth = (int)log2((double)bucket_node);
+    return ((num_leaves + leaf) >> (L - depth)) == bucket_node;
 }
 
 
-void PathORAM:: write_path(std::vector<int> path) {
+void PathORAM::write_path(const std::vector<int>& path) {
     for (int level = (int)path.size() - 1; level >= 0; --level) {
         int node_idx = path[level];
         Bucket& bucket = tree[node_idx];
@@ -210,10 +204,9 @@ int PathORAM::stash_update(int block_id, const char* data) {
         }
     }
 
-    if (idx < 0){
-        if (position_map.find(block_id) == position_map.end()){
-            position_map[block_id] = random_leaf();
-        }
+    if (idx < 0) {
+        // Block not yet in stash — create a new entry.
+        // position_map is already set by remap_block() before access() calls us.
         Block nb;
         nb.id = block_id;
         nb.is_dummy = false;
@@ -236,7 +229,7 @@ void PathORAM::encrypt_block(Block &b){
     const uint64_t key = 0xC0FFEE1234ABCDEFULL;
     uint64_t s = key ^ (uint64_t) (uint32_t) b.id;
     
-    for (int i = 1; i < BLOCK_SIZE; ++i){
+    for (int i = 0; i < BLOCK_SIZE; ++i){
         s ^= s >> 12;
         s ^= s << 25;
         s ^= s >> 27;
