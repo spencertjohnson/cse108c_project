@@ -61,11 +61,11 @@ void PathORAM::print_tree_structure() const {
 
     // print example paths
     int show = std::min(num_leaves, 4);
-    int start = 1;
+    int start = 0;
 
     for (int k = 0; k < show; k++) {
         int leaf = start + k;
-        if (leaf >= num_leaves)break;
+        if (leaf >= num_leaves - 1)break;
         auto p = get_path(leaf);
         std::cout << "leaf " << leaf << ": ";
         for (int i = 0; i < (int)p.size(); i++) {
