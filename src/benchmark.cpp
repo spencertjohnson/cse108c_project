@@ -16,8 +16,8 @@ void run_benchmark(int N, int r, int ell) {
     cout << "============================================\n";
 
     // Initialize ORAMs
-    PathORAM p_oram(N, 4);
-    rORAM r_oram(N, 4, ell); 
+    PathORAM p_oram(N, 4, "bench_path.bin");
+    rORAM r_oram(N, 4, ell, "bench_roram"); 
 
     // Warm up: fill data
     // For Path ORAM, just fill a few to avoid overhead if N is large

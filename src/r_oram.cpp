@@ -109,7 +109,6 @@ std::vector<std::string> rORAM::access(int start_addr, int range, bool is_write,
     if (i > ell) throw std::invalid_argument("range size exceeds max supported");
     int actual_range = 1 << i;
     int a0 = (start_addr / actual_range) * actual_range;
-    int L = sub_orams[i].L;
     
     // 1. & 2. Perform two ReadRanges to cover the range [start_addr, start_addr + range)
     std::vector<Block> fetched_blocks;

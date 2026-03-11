@@ -156,7 +156,21 @@ void PathORAM::read_path(int leaf) {
 
             if (!block.is_dummy){ //decrypt the path 
                 decrypt_block(block);
-                stash.push_back(block);
+                
+                // Consistency Fix: If this block already exists in the stash, it means
+                // a newer version was added (likely via rORAM multi-tree update).
+                // We keep the newer stash version and discard this stale tree version.
+                bool already_in_stash = false;
+                for (const auto& sb : stash) {
+                    if (!sb.is_dummy && sb.id == block.id) {
+                        already_in_stash = true;
+                        break;
+                    }
+                }
+
+                if (!already_in_stash) {
+                    stash.push_back(block);
+                }
                 
                 block.id = -1;
                 std::memset(block.data, 0, BLOCK_SIZE);
