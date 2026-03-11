@@ -282,20 +282,20 @@ int main() {
     std::cout << "Creating PathORAM tests...\n";
 
     // Each test gets a fresh PathORAM instance so state doesn't bleed between tests
-    { PathORAM oram(N, Z); test_many_blocks(oram, N); }
-    { PathORAM oram(N, Z); test_overwrite(oram); }
-    { PathORAM oram(N, Z); test_sequential_access(oram); }
-    { PathORAM oram(N, Z); test_all_blocks(oram, N); }
-    { PathORAM oram(N, Z); test_stash_bounded(oram, N); }
-    { PathORAM oram(N, Z); test_position_remap(oram); }
+    { PathORAM oram(N, Z, "test_many.bin"); test_many_blocks(oram, N); }
+    { PathORAM oram(N, Z, "test_overwrite.bin"); test_overwrite(oram); }
+    { PathORAM oram(N, Z, "test_seq.bin"); test_sequential_access(oram); }
+    { PathORAM oram(N, Z, "test_all.bin"); test_all_blocks(oram, N); }
+    { PathORAM oram(N, Z, "test_stash.bin"); test_stash_bounded(oram, N); }
+    { PathORAM oram(N, Z, "test_pos.bin"); test_position_remap(oram); }
 
     int ell = 2; // Supports ranges up to 2^2 = 4 blocks
     std::cout << "\nCreating rORAM with N=" << N << ", Z=" << Z << ", ell=" << ell << "\n";
     
-    { rORAM oram(N, Z, ell); test_roram_single(oram, N); }
-    { rORAM oram(N, Z, ell); test_roram_overwrite(oram); }
-    { rORAM oram(N, Z, ell); test_roram_range(oram); }
-    { rORAM oram(N, Z, ell); test_roram_cross_consistency(oram); }
+    { rORAM oram(N, Z, ell, "roram_single"); test_roram_single(oram, N); }
+    { rORAM oram(N, Z, ell, "roram_overwrite"); test_roram_overwrite(oram); }
+    { rORAM oram(N, Z, ell, "roram_range"); test_roram_range(oram); }
+    { rORAM oram(N, Z, ell, "roram_cross"); test_roram_cross_consistency(oram); }
 
     // Summary
     std::cout << "\n============================\n";

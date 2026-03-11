@@ -2,6 +2,8 @@
 #include <vector>
 #include <unordered_map>
 #include <string>
+#include <fstream>
+#include <memory>
 #include "components.hpp"
 
 // TODO Clean up comments, make sure we aren't overcommenting
@@ -16,9 +18,11 @@ private:
 
     int num_leaves; // number of leaves (power of 2)
     int num_nodes;  // total nodes = 2*num_leaves - 1
-
-    // Server Storage
-    std::vector<Bucket> tree; // The ORAM tree
+    
+    // Server Storage (Disk-backed)
+    int tags_count; // Number of tags per block (for rORAM)
+    std::string tree_filename;
+    mutable std::unique_ptr<std::fstream> tree_file;
 
     // Client Storage
     std::unordered_map<int, int> position_map; // block id -> leaf index [0..num_leaves-1]
@@ -33,8 +37,22 @@ private:
     void remap_block(int block_id);
     int stash_update(int block_id, const char* data);
 
+    // Disk Helpers
+    long node_offset(int node_idx) const;
+    Bucket read_node(int node_idx) const;
+    void write_node(int node_idx, const Bucket& b);
+    size_t get_block_size() const;
+    size_t get_bucket_size() const;
+
 public:
-    PathORAM(int N, int Z = 4);
+    PathORAM(int N, int Z = 4, const std::string& filename = "", int tags_count = 0);
+    ~PathORAM();
+
+    // Movable but not copyable (due to unique_ptr)
+    PathORAM(PathORAM&&) noexcept = default;
+    PathORAM& operator=(PathORAM&&) noexcept = default;
+    PathORAM(const PathORAM&) = delete;
+    PathORAM& operator=(const PathORAM&) = delete;
 
     std::string access(int block_id, const char* data = "", bool is_write = false);
 

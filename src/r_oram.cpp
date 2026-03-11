@@ -6,13 +6,14 @@
 #include <algorithm>
 #include <cstring>
 
-rORAM::rORAM(int N_in, int Z_in, int ell_in) : N(N_in), Z(Z_in), ell(ell_in) {
+rORAM::rORAM(int N_in, int Z_in, int ell_in, const std::string& prefix) : N(N_in), Z(Z_in), ell(ell_in) {
     if (N <= 0) throw std::invalid_argument("N must be > 0");
     if (Z <= 0) throw std::invalid_argument("Z must be > 0");
     if (ell < 0) throw std::invalid_argument("ell must be >= 0");
 
     for (int i = 0; i <= ell; ++i) {
-        sub_orams.emplace_back(N, Z);
+        std::string fname = prefix + "_sub_" + std::to_string(i) + ".bin";
+        sub_orams.emplace_back(N, Z, fname, ell + 1);
     }
     
     std::mt19937 rng{std::random_device{}()};

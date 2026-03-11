@@ -6,24 +6,52 @@
 #include <stdexcept>
 
 
-PathORAM::PathORAM(int N_in, int Z_in) : N(N_in), Z(Z_in) {
+PathORAM::PathORAM(int N_in, int Z_in, const std::string& filename, int tags_in) 
+    : N(N_in), Z(Z_in), tags_count(tags_in), tree_filename(filename) {
     if (N <= 0) throw std::invalid_argument("N must be > 0");
     if (Z <= 0) throw std::invalid_argument("Z must be > 0");
 
     // L = tree height = ceil(log2(N)), giving 2^L leaves >= N
     L = (N > 1) ? (int)ceil(log2((double)N)) : 1;
-
-    // Use bit-shift for exact integer 2^L (avoids floating-point rounding in pow())
     num_leaves = 1 << L;
-
-    // Total nodes in a 1-indexed binary heap: 2*num_leaves - 1
     num_nodes = 2 * num_leaves - 1;
 
-    // Build the tree: each bucket holds Z block slots (1-indexed, index 0 unused)
-    tree.assign(num_nodes + 1, Bucket(Z));
+    if (tree_filename.empty()) {
+        tree_filename = "path_oram_tree.bin";
+    }
 
-    // Initialise position map: assign every block a random starting leaf
+    // Initialize position map: assign every block a random starting leaf
     for (int id = 0; id < N; id++) position_map[id] = random_leaf();
+
+    // Open/initialize the tree file
+    tree_file = std::make_unique<std::fstream>();
+    tree_file->open(tree_filename, std::ios::in | std::ios::out | std::ios::binary);
+    if (!tree_file->is_open()) {
+        tree_file->clear();
+        tree_file->open(tree_filename, std::ios::out | std::ios::binary);
+        tree_file->close();
+        tree_file->open(tree_filename, std::ios::in | std::ios::out | std::ios::binary);
+    }
+
+    // Ensure file is large enough, fill with dummy buckets if empty/small
+    size_t expected_size = get_bucket_size() * (num_nodes + 1);
+    tree_file->seekg(0, std::ios::end);
+    if (tree_file->tellg() < (long)expected_size) {
+        tree_file->seekp(0, std::ios::beg);
+        Bucket dummy(Z);
+        for (int i = 0; i < Z; ++i) {
+            dummy.blocks[i].tags.resize(tags_count, 0);
+        }
+        for (int i = 0; i <= num_nodes; ++i) {
+            write_node(i, dummy);
+        }
+    }
+}
+
+PathORAM::~PathORAM() {
+    if (tree_file && tree_file->is_open()) {
+        tree_file->close();
+    }
 }
 
 
@@ -121,21 +149,22 @@ void PathORAM::read_path(int leaf) {
     std::vector<int> path = get_path(leaf);
 
     for (int node_idx : path) {
-        Bucket& bucket = tree[node_idx];
+        Bucket bucket = read_node(node_idx);
 
         for (int i = 0; i < Z; i++) {
             Block& block = bucket.blocks[i];
 
-                if (!block.is_dummy){ //decrpyt the path 
-                    decrypt_block(block);
-                    stash.push_back(block);
-                    
-                    block.id = -1;
-                    std::memset(block.data, 0, BLOCK_SIZE);
-                    block.is_dummy = true;
-                }
+            if (!block.is_dummy){ //decrypt the path 
+                decrypt_block(block);
+                stash.push_back(block);
+                
+                block.id = -1;
+                std::memset(block.data, 0, BLOCK_SIZE);
+                block.is_dummy = true;
             }
         }
+        write_node(node_idx, bucket);
+    }
 }
 
 
@@ -153,7 +182,7 @@ void PathORAM::write_path(const std::vector<int>& path) {
     path_write_count++;
     for (int level = (int)path.size() - 1; level >= 0; --level) {
         int node_idx = path[level];
-        Bucket& bucket = tree[node_idx];
+        Bucket bucket = read_node(node_idx);
 
         int filled = 0;
 
@@ -164,7 +193,6 @@ void PathORAM::write_path(const std::vector<int>& path) {
                 ++i;
                 continue;
             }
-
 
             int assigned_leaf = position_map[block.id];
 
@@ -182,12 +210,13 @@ void PathORAM::write_path(const std::vector<int>& path) {
         }
         while (filled < Z) {
             Block dummy;
+            dummy.tags.resize(tags_count, 0);
             encrypt_block(dummy);
             bucket.blocks[filled] = dummy;
             filled++;
         }
+        write_node(node_idx, bucket);
     }
-
 }
     
 
@@ -241,4 +270,57 @@ void PathORAM::encrypt_block(Block &b){
 
 void PathORAM::decrypt_block(Block &b){
     encrypt_block(b);
+}
+
+// -------------------------------------------------------------------
+// Disk Implementation
+// -------------------------------------------------------------------
+
+size_t PathORAM::get_block_size() const {
+    // id (int) + data (BLOCK_SIZE) + is_dummy (bool) + tags (int * tags_count)
+    return sizeof(int) + BLOCK_SIZE + sizeof(bool) + (tags_count * sizeof(int));
+}
+
+size_t PathORAM::get_bucket_size() const {
+    return Z * get_block_size();
+}
+
+long PathORAM::node_offset(int node_idx) const {
+    return (long)node_idx * get_bucket_size();
+}
+
+Bucket PathORAM::read_node(int node_idx) const {
+    Bucket b(Z);
+    if (!tree_file || !tree_file->is_open()) return b;
+
+    tree_file->seekg(node_offset(node_idx), std::ios::beg);
+    
+    for (int i = 0; i < Z; ++i) {
+        Block& block = b.blocks[i];
+        tree_file->read(reinterpret_cast<char*>(&block.id), sizeof(int));
+        tree_file->read(block.data, BLOCK_SIZE);
+        tree_file->read(reinterpret_cast<char*>(&block.is_dummy), sizeof(bool));
+        block.tags.resize(tags_count);
+        if (tags_count > 0) {
+            tree_file->read(reinterpret_cast<char*>(block.tags.data()), tags_count * sizeof(int));
+        }
+    }
+    return b;
+}
+
+void PathORAM::write_node(int node_idx, const Bucket& b) {
+    if (!tree_file || !tree_file->is_open()) return;
+
+    tree_file->seekp(node_offset(node_idx), std::ios::beg);
+    
+    for (int i = 0; i < Z; ++i) {
+        const Block& block = b.blocks[i];
+        tree_file->write(reinterpret_cast<const char*>(&block.id), sizeof(int));
+        tree_file->write(block.data, BLOCK_SIZE);
+        tree_file->write(reinterpret_cast<const char*>(&block.is_dummy), sizeof(bool));
+        if (tags_count > 0) {
+            tree_file->write(reinterpret_cast<const char*>(block.tags.data()), tags_count * sizeof(int));
+        }
+    }
+    tree_file->flush();
 }
