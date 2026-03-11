@@ -17,14 +17,20 @@ MAIN_OBJ := $(OBJ_DIR)/main.o
 BENCH_SRC := $(SRC_DIR)/benchmark.cpp
 BENCH_OBJ := $(OBJ_DIR)/benchmark.o
 
-.PHONY: all run clean benchmark
+VERIFY_LAYOUT := $(BIN_DIR)/verify_layout
+VERIFY_LAYOUT_OBJ := $(OBJ_DIR)/verify_layout.o
 
-all: $(TARGET) $(BENCHMARK)
+.PHONY: all run clean benchmark verify
+
+all: $(TARGET) $(BENCHMARK) $(VERIFY_LAYOUT)
 
 $(TARGET): $(MAIN_OBJ) $(COMMON_OBJS) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $^ -o $@
 
 $(BENCHMARK): $(BENCH_OBJ) $(COMMON_OBJS) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(VERIFY_LAYOUT): $(VERIFY_LAYOUT_OBJ) $(COMMON_OBJS) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $^ -o $@
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp | $(OBJ_DIR)

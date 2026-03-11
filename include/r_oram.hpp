@@ -26,5 +26,7 @@ public:
 
     long long get_total_path_reads() const;
     long long get_total_path_writes() const;
+    long long get_total_node_reads() const;
+    long long get_total_node_writes() const;
     void reset_counts();
 };

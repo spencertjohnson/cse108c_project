@@ -63,12 +63,13 @@ void run_benchmark(int N, int r, int ell) {
     // Report
     cout << left << setw(15) << "Metric" << setw(15) << "Path ORAM" << setw(15) << "rORAM" << endl;
     cout << string(45, '-') << endl;
-    cout << left << setw(15) << "Total Blocks" << setw(15) << num_ops * r << setw(15) << num_ops * r << endl;
+    cout << left << setw(15) << "Total Blocks" << (int)(num_ops * r) << setw(11) << "" << (int)(num_ops * r) << endl;
+    cout << fixed << setprecision(2);
     cout << left << setw(15) << "Avg Latency" << setw(15) << (double)duration_p.count()/1000.0/num_ops << " ms" << setw(15) << (double)duration_r.count()/1000.0/num_ops << " ms" << " (per range op)" << endl;
     cout << left << setw(15) << "Path Reads" << setw(15) << p_oram.get_path_read_count() << setw(15) << r_oram.get_total_path_reads() << endl;
     cout << left << setw(15) << "Path Writes" << setw(15) << p_oram.get_path_write_count() << setw(15) << r_oram.get_total_path_writes() << endl;
-    cout << left << setw(15) << "Bandwidth" << setw(15) << p_oram.get_path_read_count() + p_oram.get_path_write_count() 
-         << setw(15) << r_oram.get_total_path_reads() + r_oram.get_total_path_writes() << " (total paths)" << endl;
+    cout << left << setw(15) << "Node Reads" << setw(15) << p_oram.get_node_read_count() << setw(15) << r_oram.get_total_node_reads() << endl;
+    cout << left << setw(15) << "Node Writes" << setw(15) << p_oram.get_node_write_count() << setw(15) << r_oram.get_total_node_writes() << endl;
 }
 
 int main() {

@@ -37,12 +37,14 @@ private:
     void remap_block(int block_id);
     int stash_update(int block_id, const char* data);
 
+    // Node-level helpers for BatchEvict
+    int node_at_level(int leaf, int level) const;
+    void read_node_into_stash(int node_idx);
+    void write_node_from_stash(int node_idx);
+
     // Disk Helpers
-    long node_offset(int node_idx) const;
     Bucket read_node(int node_idx) const;
     void write_node(int node_idx, const Bucket& b);
-    size_t get_block_size() const;
-    size_t get_bucket_size() const;
 
 public:
     PathORAM(int N, int Z = 4, const std::string& filename = "", int tags_count = 0);
@@ -66,11 +68,24 @@ public:
     static void encrypt_block(Block &b);
     static void decrypt_block(Block &b);
 
-    long long get_path_read_count() const { return path_read_count; }
-    long long get_path_write_count() const { return path_write_count; }
-    void reset_counts() { path_read_count = 0; path_write_count = 0; }
+    long long get_path_read_count() const { return (long long)path_read_count; }
+    long long get_path_write_count() const { return (long long)path_write_count; }
+    long long get_node_read_count() const { return node_read_count; }
+    long long get_node_write_count() const { return node_write_count; }
+
+    void reset_counts() { 
+        path_read_count = 0; path_write_count = 0; 
+        node_read_count = 0; node_write_count = 0;
+    }
+
+    long node_offset(int node_idx) const;
+    int get_bit_reversed_index(int node_idx) const;
+    size_t get_block_size() const;
+    size_t get_bucket_size() const;
 
 private:
-    mutable long long path_read_count{0};
-    mutable long long path_write_count{0};
+    mutable double path_read_count{0};
+    mutable double path_write_count{0};
+    mutable long long node_read_count{0};
+    mutable long long node_write_count{0};
 };

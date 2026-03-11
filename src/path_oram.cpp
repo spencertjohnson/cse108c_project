@@ -23,9 +23,10 @@ PathORAM::PathORAM(int N_in, int Z_in, const std::string& filename, int tags_in)
     // Initialize position map: assign every block a random starting leaf
     for (int id = 0; id < N; id++) position_map[id] = random_leaf();
 
-    // Open/initialize the tree file
+    // Open/initialize the tree file. 
+    // Stage 2: We wipe the file to ensure we start fresh with the bit-reversed layout.
     tree_file = std::make_unique<std::fstream>();
-    tree_file->open(tree_filename, std::ios::in | std::ios::out | std::ios::binary);
+    tree_file->open(tree_filename, std::ios::in | std::ios::out | std::ios::binary | std::ios::trunc);
     if (!tree_file->is_open()) {
         tree_file->clear();
         tree_file->open(tree_filename, std::ios::out | std::ios::binary);
@@ -33,19 +34,18 @@ PathORAM::PathORAM(int N_in, int Z_in, const std::string& filename, int tags_in)
         tree_file->open(tree_filename, std::ios::in | std::ios::out | std::ios::binary);
     }
 
-    // Ensure file is large enough, fill with dummy buckets if empty/small
-    size_t expected_size = get_bucket_size() * (num_nodes + 1);
-    tree_file->seekg(0, std::ios::end);
-    if (tree_file->tellg() < (long)expected_size) {
-        tree_file->seekp(0, std::ios::beg);
-        Bucket dummy(Z);
-        for (int i = 0; i < Z; ++i) {
-            dummy.blocks[i].tags.resize(tags_count, 0);
-        }
-        for (int i = 0; i <= num_nodes; ++i) {
-            write_node(i, dummy);
-        }
+    // Ensure file is large enough, fill with dummy buckets
+    size_t expected_size = get_bucket_size() * num_nodes;
+    tree_file->seekp(0, std::ios::beg);
+    Bucket dummy(Z);
+    for (int i = 0; i < Z; ++i) {
+        dummy.blocks[i].tags.resize(tags_count, 0);
     }
+    // Nodes are 1-indexed in logic, but we map them to 0-indexed physical space
+    for (int i = 1; i <= num_nodes; ++i) {
+        write_node(i, dummy);
+    }
+    if (tree_file && tree_file->is_open()) tree_file->flush();
 }
 
 PathORAM::~PathORAM() {
@@ -142,95 +142,101 @@ std::string PathORAM::access(int block_id, const char* data, bool is_write) {
 // -------------------------------------------------------------------
 // Access Helpers
 // -------------------------------------------------------------------
+int PathORAM::node_at_level(int leaf, int level) const {
+    // In a 1-indexed heap array:
+    // leaf node index = num_leaves + leaf
+    // Ancestor at level 'level' is found by shifting right
+    return (num_leaves + leaf) >> (L - level);
+}
 
+void PathORAM::read_node_into_stash(int node_idx) {
+    Bucket bucket = read_node(node_idx);
+
+    for (int i = 0; i < Z; i++) {
+        Block& block = bucket.blocks[i];
+
+        if (!block.is_dummy){ 
+            decrypt_block(block);
+            
+            // Consistency Fix: Prefer stash data if it already exists
+            bool already_in_stash = false;
+            for (const auto& sb : stash) {
+                if (!sb.is_dummy && sb.id == block.id) {
+                    already_in_stash = true;
+                    break;
+                }
+            }
+
+            if (!already_in_stash) {
+                stash.push_back(block);
+            }
+            
+            block.id = -1;
+            std::memset(block.data, 0, BLOCK_SIZE);
+            block.is_dummy = true;
+        }
+    }
+    write_node(node_idx, bucket);
+}
 
 void PathORAM::read_path(int leaf) {
-    path_read_count++;
+    path_read_count += 1.0;
     std::vector<int> path = get_path(leaf);
 
     for (int node_idx : path) {
-        Bucket bucket = read_node(node_idx);
-
-        for (int i = 0; i < Z; i++) {
-            Block& block = bucket.blocks[i];
-
-            if (!block.is_dummy){ //decrypt the path 
-                decrypt_block(block);
-                
-                // Consistency Fix: If this block already exists in the stash, it means
-                // a newer version was added (likely via rORAM multi-tree update).
-                // We keep the newer stash version and discard this stale tree version.
-                bool already_in_stash = false;
-                for (const auto& sb : stash) {
-                    if (!sb.is_dummy && sb.id == block.id) {
-                        already_in_stash = true;
-                        break;
-                    }
-                }
-
-                if (!already_in_stash) {
-                    stash.push_back(block);
-                }
-                
-                block.id = -1;
-                std::memset(block.data, 0, BLOCK_SIZE);
-                block.is_dummy = true;
-            }
-        }
-        write_node(node_idx, bucket);
+        read_node_into_stash(node_idx);
     }
+    if (tree_file && tree_file->is_open()) tree_file->flush();
 }
 
 
 bool PathORAM::bucket_on_path(int bucket_node, int leaf) const {
     // O(1): bucket b is on the path to leaf x iff the leaf's ancestor at
-    // the same depth as b equals b.  Depth of b = floor(log2(b)) in a
-    // 1-indexed heap.  Shifting (num_leaves + leaf) right by (L - depth)
-    // gives that ancestor.
+    // the same depth as b equals b.
     int depth = (int)log2((double)bucket_node);
     return ((num_leaves + leaf) >> (L - depth)) == bucket_node;
 }
 
+void PathORAM::write_node_from_stash(int node_idx) {
+    Bucket bucket = read_node(node_idx);
+    int filled = 0;
+
+    for (size_t i = 0; i < stash.size() && filled < Z; ) {
+        Block& block = stash[i];
+        if (block.is_dummy) {
+            ++i; continue;
+        }
+
+        int assigned_leaf = position_map[block.id];
+        if (bucket_on_path(node_idx, assigned_leaf)) {
+            encrypt_block(block);
+            bucket.blocks[filled] = block;
+
+            stash[i] = stash.back();
+            stash.pop_back();
+            filled++;
+        } else {
+            ++i;
+        }
+    }
+
+    // Fill remaining slots with dummies
+    while (filled < Z) {
+        Block dummy;
+        dummy.tags.resize(tags_count, 0);
+        encrypt_block(dummy);
+        bucket.blocks[filled++] = dummy;
+    }
+    write_node(node_idx, bucket);
+}
+
 
 void PathORAM::write_path(const std::vector<int>& path) {
-    path_write_count++;
+    path_write_count += 1.0;
     for (int level = (int)path.size() - 1; level >= 0; --level) {
-        int node_idx = path[level];
-        Bucket bucket = read_node(node_idx);
-
-        int filled = 0;
-
-        for (size_t i = 0; i < stash.size() && filled < Z; ) {
-            Block& block = stash[i];
-
-            if (block.is_dummy) {
-                ++i;
-                continue;
-            }
-
-            int assigned_leaf = position_map[block.id];
-
-            if (bucket_on_path(node_idx, assigned_leaf)) {
-                encrypt_block(block);
-                bucket.blocks[filled] = block;
-
-                stash[i] = stash.back();
-                stash.pop_back();
-                filled++;
-            }
-            else {
-                ++i;
-            }
-        }
-        while (filled < Z) {
-            Block dummy;
-            dummy.tags.resize(tags_count, 0);
-            encrypt_block(dummy);
-            bucket.blocks[filled] = dummy;
-            filled++;
-        }
-        write_node(node_idx, bucket);
+        write_node_from_stash(path[level]);
     }
+    if (tree_file && tree_file->is_open()) tree_file->flush();
 }
     
 
@@ -300,10 +306,36 @@ size_t PathORAM::get_bucket_size() const {
 }
 
 long PathORAM::node_offset(int node_idx) const {
-    return (long)node_idx * get_bucket_size();
+    if (node_idx <= 0) return 0;
+    
+    // 1. Determine level d (0-indexed)
+    int d = (int)std::floor(std::log2((double)node_idx));
+    
+    // 2. level_start = 2^d - 1
+    int level_start = (1 << d) - 1;
+    
+    // 3. physical_idx = level_start + bit_reversed_offset
+    int physical_idx = level_start + get_bit_reversed_index(node_idx);
+    
+    return (long)physical_idx * get_bucket_size();
+}
+
+int PathORAM::get_bit_reversed_index(int node_idx) const {
+    if (node_idx <= 0) return 0;
+    int d = (int)std::floor(std::log2((double)node_idx));
+    int offset = node_idx - (1 << d);
+    
+    // Reverse 'd' bits of 'offset'
+    int reversed = 0;
+    for (int i = 0; i < d; ++i) {
+        reversed = (reversed << 1) | (offset & 1);
+        offset >>= 1;
+    }
+    return reversed;
 }
 
 Bucket PathORAM::read_node(int node_idx) const {
+    node_read_count++;
     Bucket b(Z);
     if (!tree_file || !tree_file->is_open()) return b;
 
@@ -323,6 +355,7 @@ Bucket PathORAM::read_node(int node_idx) const {
 }
 
 void PathORAM::write_node(int node_idx, const Bucket& b) {
+    node_write_count++;
     if (!tree_file || !tree_file->is_open()) return;
 
     tree_file->seekp(node_offset(node_idx), std::ios::beg);
@@ -336,5 +369,4 @@ void PathORAM::write_node(int node_idx, const Bucket& b) {
             tree_file->write(reinterpret_cast<const char*>(block.tags.data()), tags_count * sizeof(int));
         }
     }
-    tree_file->flush();
 }

@@ -51,30 +51,44 @@ int rORAM::bit_reverse(int x, int bits) {
     return res;
 }
 
-std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram, int start_addr) {
-    int L = sub_orams[sub_oram].L;
-    int num_leaves = sub_orams[sub_oram].num_leaves_count();
-    int actual_range = 1 << sub_oram; 
-    int old_br_start = (start_addr < N) ? rpm[start_addr][sub_oram] : 0; // Use dummy path 0 if OOB
+std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_addr) {
+    PathORAM& po = sub_orams[sub_oram_idx];
+    int L = po.L;
+    int num_leaves = po.num_leaves_count();
+    int actual_range = 1 << sub_oram_idx; 
+    int old_br_start = (start_addr < N) ? rpm[start_addr][sub_oram_idx] : 0;
     
-    // Generate a single new random base position for this sub-ORAM (p')
     static thread_local std::mt19937 rng{std::random_device{}()};
     std::uniform_int_distribution<int> dist(0, num_leaves - 1);
     int p_prime = dist(rng);
     
-    // Read actual_range consecutive paths in bit-reversed order
+    // Step 1: Collect leaves for the range
+    std::vector<int> leaves;
     for (int k = 0; k < actual_range; ++k) {
         int phys_idx = (old_br_start + k) % num_leaves;
-        int leaf = bit_reverse(phys_idx, L);
-        sub_orams[sub_oram].read_path(leaf);
+        leaves.push_back(bit_reverse(phys_idx, L));
     }
-    
-    // Retrieve blocks
+
+    // Step 2: Read Top-Down level-by-level (0 to L)
+    for (int level = 0; level <= L; ++level) {
+        std::vector<int> unique_nodes;
+        for (int leaf : leaves) {
+            int node = po.node_at_level(leaf, level);
+            if (std::find(unique_nodes.begin(), unique_nodes.end(), node) == unique_nodes.end()) {
+                unique_nodes.push_back(node);
+            }
+        }
+        for (int node : unique_nodes) {
+            po.read_node_into_stash(node);
+        }
+    }
+
+    // Step 3: Retrieve blocks from stash
     std::vector<Block> range_blocks;
     for (int k = 0; k < actual_range; ++k) {
         int addr = start_addr + k;
         bool found = false;
-        for (Block& b : sub_orams[sub_oram].stash) {
+        for (Block& b : po.stash) {
             if (b.id == addr && !b.is_dummy) {
                 range_blocks.push_back(b);
                 found = true;
@@ -90,14 +104,48 @@ std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram, int start_addr
     return {range_blocks, p_prime};
 }
 
-void rORAM::BatchEvict(int sub_oram, int num_evictions) {
-    PathORAM& po = sub_orams[sub_oram];
-    for (int i = 0; i < num_evictions; ++i) {
-        int leaf = bit_reverse(po.eviction_counter % po.num_leaves, po.L);
-        po.read_path(leaf);
-        po.write_path(po.get_path(leaf));
+void rORAM::BatchEvict(int sub_oram_idx, int num_evictions) {
+    PathORAM& po = sub_orams[sub_oram_idx];
+    int L = po.L;
+
+    // Step 1: Determine target leaves for eviction
+    std::vector<int> leaves;
+    for (int k = 0; k < num_evictions; ++k) {
+        int leaf = bit_reverse(po.eviction_counter % po.num_leaves, L);
+        leaves.push_back(leaf);
         po.eviction_counter++;
     }
+
+    // Step 2: Read Top-Down (0 to L)
+    for (int level = 0; level <= L; ++level) {
+        std::vector<int> unique_nodes;
+        for (int leaf : leaves) {
+            int node = po.node_at_level(leaf, level);
+            if (std::find(unique_nodes.begin(), unique_nodes.end(), node) == unique_nodes.end()) {
+                unique_nodes.push_back(node);
+            }
+        }
+        for (int node : unique_nodes) {
+            po.read_node_into_stash(node);
+        }
+    }
+
+    // Step 3: Write Bottom-Up (L down to 0)
+    for (int level = L; level >= 0; --level) {
+        std::vector<int> unique_nodes;
+        for (int leaf : leaves) {
+            int node = po.node_at_level(leaf, level);
+            if (std::find(unique_nodes.begin(), unique_nodes.end(), node) == unique_nodes.end()) {
+                unique_nodes.push_back(node);
+            }
+        }
+        for (int node : unique_nodes) {
+            po.write_node_from_stash(node);
+        }
+    }
+
+    // Flush once per batch eviction
+    if (po.tree_file && po.tree_file->is_open()) po.tree_file->flush();
 }
 
 std::vector<std::string> rORAM::access(int start_addr, int range, bool is_write, const std::vector<std::string>& data) {
@@ -112,26 +160,41 @@ std::vector<std::string> rORAM::access(int start_addr, int range, bool is_write,
     
     // 1. & 2. Perform two ReadRanges to cover the range [start_addr, start_addr + range)
     std::vector<Block> fetched_blocks;
-    std::vector<int> p_primes;
     for (int a_prime : {a0, a0 + actual_range}) {
         auto read_res = ReadRange(i, a_prime);
         for (const auto& b : read_res.first) {
             fetched_blocks.push_back(b);
         }
-        p_primes.push_back(read_res.second);
+    }
+    
+    // Consistency Fix: Ensure fetched_blocks contains the latest data from ANY stash.
+    for (auto& b : fetched_blocks) {
+        if (b.is_dummy) continue;
+        for (int j = 0; j <= ell; ++j) {
+            for (const auto& sb : sub_orams[j].stash) {
+                if (!sb.is_dummy && sb.id == b.id) {
+                    std::memcpy(b.data, sb.data, BLOCK_SIZE);
+                    b.is_dummy = false;
+                    break;
+                }
+            }
+        }
     }
     
     // 3. Remap
-    int idx = 0;
+    static thread_local std::mt19937 rng{std::random_device{}()};
     for (int a_prime : {a0, a0 + actual_range}) {
-        int p_prime = p_primes[idx++];
-        
+        std::vector<int> p_primes_per_suboram(ell + 1);
+        for (int j = 0; j <= ell; ++j) {
+            std::uniform_int_distribution<int> d(0, sub_orams[j].num_leaves_count() - 1);
+            p_primes_per_suboram[j] = d(rng);
+        }
+
         for (int k = 0; k < actual_range; ++k) {
             int addr = a_prime + k;
             if (addr < N) {
-                // Update position map for all sub-ORAMs as requested
                 for (int j = 0; j <= ell; ++j) {
-                    rpm[addr][j] = (p_prime + k) % sub_orams[j].num_leaves_count();
+                    rpm[addr][j] = (p_primes_per_suboram[j] + k) % sub_orams[j].num_leaves_count();
                     sub_orams[j].position_map[addr] = bit_reverse(rpm[addr][j], sub_orams[j].L);
                 }
             }
@@ -164,9 +227,9 @@ std::vector<std::string> rORAM::access(int start_addr, int range, bool is_write,
             });
         sub_orams[j].stash.erase(it, sub_orams[j].stash.end());
         
-        for (auto b : fetched_blocks) {  // pass by value to modify locally if needed
+        for (auto b : fetched_blocks) {
             if (!b.is_dummy) {
-                b.tags = rpm[b.id]; // Sync the Block's internal distributed tag map
+                b.tags = rpm[b.id]; 
                 sub_orams[j].stash.push_back(b);
             }
         }
@@ -190,6 +253,22 @@ long long rORAM::get_total_path_writes() const {
     long long total = 0;
     for (const auto& oram : sub_orams) {
         total += oram.get_path_write_count();
+    }
+    return total;
+}
+
+long long rORAM::get_total_node_reads() const {
+    long long total = 0;
+    for (const auto& oram : sub_orams) {
+        total += oram.get_node_read_count();
+    }
+    return total;
+}
+
+long long rORAM::get_total_node_writes() const {
+    long long total = 0;
+    for (const auto& oram : sub_orams) {
+        total += oram.get_node_write_count();
     }
     return total;
 }
