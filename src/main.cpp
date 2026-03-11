@@ -1,4 +1,5 @@
 #include "path_oram.hpp"
+#include "r_oram.hpp"
 #include <iostream>
 #include <cassert>
 #include <string>
@@ -152,6 +153,100 @@ static void test_position_remap(PathORAM& oram) {
 }
 
 // -----------------------------------------------------------------------
+// rORAM Tests
+// -----------------------------------------------------------------------
+
+static void test_roram_single(rORAM& oram, int N) {
+    std::cout << "\n-- test_roram_single --\n";
+    for (int i = 0; i < N; ++i) {
+        oram.access(i, 1, true, {"roram_" + std::to_string(i)});
+    }
+    for (int i = 0; i < N; ++i) {
+        std::string got = oram.access(i, 1)[0];
+        ASSERT_EQ("roram single read block " + std::to_string(i), got, "roram_" + std::to_string(i));
+    }
+}
+
+static void test_roram_overwrite(rORAM& oram) {
+    std::cout << "\n-- test_roram_overwrite --\n";
+    oram.access(2, 1, true, {"alpha"});
+    oram.access(2, 1, true, {"beta"});
+    std::string got = oram.access(2, 1)[0];
+    ASSERT_EQ("roram overwrite via access returns latest", got, "beta");
+}
+
+static void test_roram_range(rORAM& oram) {
+    std::cout << "\n-- test_roram_range --\n";
+    int start = 4;
+    int r = 4; // should hit sub-ORAM i=2 (size 2^2=4)
+    std::vector<std::string> data = {"val4", "val5", "val6", "val7"};
+    
+    // Write range
+    oram.access(start, r, true, data);
+    
+    // Read range back
+    std::vector<std::string> got = oram.access(start, r);
+    ASSERT_TRUE("range returning correct size", got.size() == (size_t)r, "got size " + std::to_string(got.size()));
+    if (got.size() == (size_t)r) {
+        for (int i = 0; i < r; ++i) {
+            ASSERT_EQ("roram range read block " + std::to_string(start + i), got[i], data[i]);
+        }
+    }
+    
+    // Unaligned range test
+    int unalign_start = 5;
+    int unalign_r = 3; // i=2, actual_range=4, a0=4
+    std::vector<std::string> unalign_data = {"x", "y", "z"};
+    oram.access(unalign_start, unalign_r, true, unalign_data);
+    
+    std::vector<std::string> unalign_got = oram.access(unalign_start, unalign_r);
+    ASSERT_TRUE("unaligned range returning correct size", unalign_got.size() == (size_t)unalign_r, "got size " + std::to_string(unalign_got.size()));
+    if (unalign_got.size() == (size_t)unalign_r) {
+        for (int i = 0; i < unalign_r; ++i) {
+            ASSERT_EQ("roram unaligned range read block " + std::to_string(unalign_start + i), unalign_got[i], unalign_data[i]);
+        }
+    }
+}
+
+static void test_roram_cross_consistency(rORAM& oram) {
+    std::cout << "\n-- test_roram_cross_consistency --\n";
+    // Write 4 blocks via access (hits R2)
+    std::vector<std::string> data4 = {"A", "B", "C", "D"};
+    oram.access(0, 4, true, data4);
+    
+    // Read first two blocks via access size 2 (hits R1)
+    std::vector<std::string> got2 = oram.access(0, 2);
+    ASSERT_EQ("cross-consistency read 0 (R2->R1)", got2.size() > 0 ? got2[0] : "", "A");
+    ASSERT_EQ("cross-consistency read 1 (R2->R1)", got2.size() > 1 ? got2[1] : "", "B");
+    
+    // Read third block via single access (hits R0)
+    std::string got1 = oram.access(2, 1)[0];
+    ASSERT_EQ("cross-consistency read 2 (R2->R0)", got1, "C");
+    
+    // Update block 1 via single access (hits R0)
+    oram.access(1, 1, true, {"B_mod"});
+    
+    // Read range 4 again (hits R2, should see R0's write via stash propagation)
+    std::vector<std::string> got4 = oram.access(0, 4);
+    ASSERT_EQ("cross-consistency write 1 (R0->R2)", got4.size() > 1 ? got4[1] : "", "B_mod");
+    
+    // Harder test: Trigger many eviction cycles
+    for (int round = 0; round < 10; ++round) {
+        oram.access(0, 4);
+    }
+    
+    // Verify data is still intact after heavy eviction
+    std::vector<std::string> got4_final = oram.access(0, 4);
+    ASSERT_TRUE("cross-consistency stress check returns correct size", got4_final.size() == 4, "");
+    if (got4_final.size() == 4) {
+        ASSERT_EQ("cross-consistency stress check [0]", got4_final[0], "A");
+        ASSERT_EQ("cross-consistency stress check [1]", got4_final[1], "B_mod");
+        ASSERT_EQ("cross-consistency stress check [2]", got4_final[2], "C");
+        ASSERT_EQ("cross-consistency stress check [3]", got4_final[3], "D");
+    }
+}
+
+// -----------------------------------------------------------------------
 // Main
 // -----------------------------------------------------------------------
 
@@ -184,15 +279,23 @@ int main() {
         }
     }
 
-    std::cout << "Creating PathORAM with N=" << N << ", Z=" << Z << "\n";
+    std::cout << "Creating PathORAM tests...\n";
 
-    // Each test gets a fresh ORAM instance so state doesn't bleed between tests
+    // Each test gets a fresh PathORAM instance so state doesn't bleed between tests
     { PathORAM oram(N, Z); test_many_blocks(oram, N); }
     { PathORAM oram(N, Z); test_overwrite(oram); }
     { PathORAM oram(N, Z); test_sequential_access(oram); }
     { PathORAM oram(N, Z); test_all_blocks(oram, N); }
     { PathORAM oram(N, Z); test_stash_bounded(oram, N); }
     { PathORAM oram(N, Z); test_position_remap(oram); }
+
+    int ell = 2; // Supports ranges up to 2^2 = 4 blocks
+    std::cout << "\nCreating rORAM with N=" << N << ", Z=" << Z << ", ell=" << ell << "\n";
+    
+    { rORAM oram(N, Z, ell); test_roram_single(oram, N); }
+    { rORAM oram(N, Z, ell); test_roram_overwrite(oram); }
+    { rORAM oram(N, Z, ell); test_roram_range(oram); }
+    { rORAM oram(N, Z, ell); test_roram_cross_consistency(oram); }
 
     // Summary
     std::cout << "\n============================\n";

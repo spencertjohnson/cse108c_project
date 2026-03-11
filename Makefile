@@ -6,16 +6,26 @@ SRC_DIR  := src
 OBJ_DIR  := build
 BIN_DIR  := bin
 TARGET   := $(BIN_DIR)/oram
+BENCHMARK := $(BIN_DIR)/benchmark
 
-SRCS := $(SRC_DIR)/main.cpp $(SRC_DIR)/path_oram.cpp
-OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(SRCS))
+COMMON_SRCS := $(SRC_DIR)/path_oram.cpp $(SRC_DIR)/r_oram.cpp
+COMMON_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(COMMON_SRCS))
 
-.PHONY: all run clean
+MAIN_SRC := $(SRC_DIR)/main.cpp
+MAIN_OBJ := $(OBJ_DIR)/main.o
 
-all: $(TARGET)
+BENCH_SRC := $(SRC_DIR)/benchmark.cpp
+BENCH_OBJ := $(OBJ_DIR)/benchmark.o
 
-$(TARGET): $(OBJS) | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(OBJS) -o $@
+.PHONY: all run clean benchmark
+
+all: $(TARGET) $(BENCHMARK)
+
+$(TARGET): $(MAIN_OBJ) $(COMMON_OBJS) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(BENCHMARK): $(BENCH_OBJ) $(COMMON_OBJS) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp | $(OBJ_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
@@ -28,6 +38,9 @@ $(BIN_DIR):
 
 run: $(TARGET)
 	./$(TARGET)
+
+benchmark: $(BENCHMARK)
+	./$(BENCHMARK)
 
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR)

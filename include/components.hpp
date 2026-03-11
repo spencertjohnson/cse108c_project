@@ -8,6 +8,7 @@ struct Block {
     int id;
     char data[BLOCK_SIZE];
     bool is_dummy;
+    std::vector<int> tags; // rORAM distributed position map (stores bit-reversed positions)
 
     Block()
         : id(-1), is_dummy(true) {

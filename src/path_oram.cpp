@@ -117,6 +117,7 @@ std::string PathORAM::access(int block_id, const char* data, bool is_write) {
 
 
 void PathORAM::read_path(int leaf) {
+    path_read_count++;
     std::vector<int> path = get_path(leaf);
 
     for (int node_idx : path) {
@@ -149,6 +150,7 @@ bool PathORAM::bucket_on_path(int bucket_node, int leaf) const {
 
 
 void PathORAM::write_path(const std::vector<int>& path) {
+    path_write_count++;
     for (int level = (int)path.size() - 1; level >= 0; --level) {
         int node_idx = path[level];
         Bucket& bucket = tree[node_idx];
