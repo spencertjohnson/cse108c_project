@@ -218,14 +218,3 @@ void PathORAM::write_node(int node_idx, const Bucket& b) {
 
     ++node_write_count;
 }
-
-// -------------------------------------------------------------------
-// Benchmark Helpers
-// -------------------------------------------------------------------
-
-void PathORAM::reset_counts() {
-    path_read_count  = 0;
-    path_write_count = 0;
-    node_read_count  = 0;
-    node_write_count = 0;
-}
