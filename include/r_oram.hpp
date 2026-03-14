@@ -7,7 +7,6 @@
 class rORAM {
 private:
     int N; // Number of blocks
-    int Z; // Number of blocks per bucket
     int ell; // Number of sub-ORAMs - 1 (max range size = 2^ell)
     
     std::vector<PathORAM> sub_orams; // R[0..ell]
@@ -20,8 +19,8 @@ private:
     void BatchEvict(int sub_oram, int num_evictions);
     
 public:
-    rORAM(int N, int Z = 4, int ell = 2, const std::string& filename_prefix = "roram");
-    std::vector<std::string> access(int start_addr, int range, bool is_write = false, const std::vector<std::string>& data = {});
+    rORAM(int N, int ell = 2, const std::string& filename_prefix = "roram");
+    void access(int start_addr, int range, const uint8_t* data_in, bool is_write, uint8_t* data_out);
     int get_ell() const { return ell; }
 
     long long get_total_path_reads() const;
