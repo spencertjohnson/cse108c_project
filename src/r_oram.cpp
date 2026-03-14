@@ -1,3 +1,4 @@
+/*
 #include "r_oram.hpp"
 #include <iostream>
 #include <cmath>
@@ -167,20 +168,6 @@ std::vector<std::string> rORAM::access(int start_addr, int range, bool is_write,
         }
     }
     
-    // Consistency Fix: Ensure fetched_blocks contains the latest data from ANY stash.
-    for (auto& b : fetched_blocks) {
-        if (b.is_dummy) continue;
-        for (int j = 0; j <= ell; ++j) {
-            for (const auto& sb : sub_orams[j].stash) {
-                if (!sb.is_dummy && sb.id == b.id) {
-                    std::memcpy(b.data, sb.data, BLOCK_SIZE);
-                    b.is_dummy = false;
-                    break;
-                }
-            }
-        }
-    }
-    
     // 3. Remap
     static thread_local std::mt19937 rng{std::random_device{}()};
     for (int a_prime : {a0, a0 + actual_range}) {
@@ -278,3 +265,4 @@ void rORAM::reset_counts() {
         oram.reset_counts();
     }
 }
+*/
