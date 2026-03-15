@@ -7,9 +7,12 @@
 #include <random>
 #include "components.hpp"
 
+// TODO: Implement Path ORAM access functions for rORAM
+// TODO: finished r oram hpp
+// TODO: implement roram
+
 
 class PathORAM {
-    friend class rORAM;
 private:
     int N; // Number of blocks
     int L; // Height of the tree (levels). 
@@ -27,13 +30,11 @@ private:
 
     int random_leaf() const;
 
-    int node_at_level(int leaf, int level) const;
-
     // Disk Helpers
-    Bucket read_node(int node_idx) const;
-    void write_node(int node_idx, const Bucket& b);
     void read_bucket(int node_idx);
     void write_bucket(int node_idx, int leaf_x, int level);
+    Bucket read_node(int node_idx) const;
+    void write_node(int node_idx, const Bucket& b);
 
     mutable long long path_read_count{0};
     mutable long long path_write_count{0};
@@ -47,6 +48,19 @@ public:
     ~PathORAM();
 
     void access(int block_id, const uint8_t* data, bool is_write, uint8_t *data_out);
+
+    // functions for rORAM
+    // ----------------------------------------------------------------
+
+    // getters and setters
+    int get_N() const { return N; }
+    int get_L() const { return L; }
+    int get_num_leaves() const { return num_leaves; }
+
+    // helper
+    int node_at_level(int leaf, int level) const;
+
+    // ----------------------------------------------------------------
 
     // Test/inspection helpers
     int stash_size() const { return (int)stash.size(); }
