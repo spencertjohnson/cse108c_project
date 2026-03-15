@@ -7,10 +7,6 @@
 #include <random>
 #include "components.hpp"
 
-// TODO: Implement Path ORAM access functions for rORAM
-// TODO: finished r oram hpp
-// TODO: implement roram
-
 
 class PathORAM {
 private:
@@ -59,6 +55,7 @@ public:
 
     // helper
     int node_at_level(int leaf, int level) const;
+    std::fstream& get_file() const { return *tree_file; }
 
     // ----------------------------------------------------------------
 
