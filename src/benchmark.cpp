@@ -93,18 +93,22 @@ PathTrialResult run_single_trial_path(int N, int r, int num_ops,
 // rORAM trial
 // -----------------------------------------------------------------------
 
-rORAMTrialResult run_single_trial_roram(int N, int r, int ell, int num_ops,
-                                        const string& trial_name) {
+rORAMTrialResult run_single_trial_roram(int N, int r, int ell, int num_ops, const string& trial_name) {
+    cerr << "    Creating rORAM...\n";
     rORAM oram(N, ell, "data/" + trial_name + "_roram");
+    cerr << "    rORAM created\n";
 
-    // Fill with initial data using range writes
     int chunk = 1 << ell;
+    cerr << "    Filling with chunk=" << chunk << "\n";
     for (int i = 0; i < N; i += chunk) {
+        cerr << "    Writing chunk at i=" << i << "\n";
         std::vector<uint8_t> chunk_buf(chunk * BLOCK_SIZE, 0);
         for (int k = 0; k < chunk && i + k < N; ++k)
             std::memset(chunk_buf.data() + k * BLOCK_SIZE, (i + k) & 0xFF, BLOCK_SIZE);
         oram.access(i, chunk, chunk_buf.data(), true, nullptr);
     }
+    cerr << "    Fill complete\n";
+
     oram.reset_counts();
 
     std::mt19937 rng{std::random_device{}()};
