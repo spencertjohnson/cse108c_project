@@ -15,14 +15,11 @@ private:
     std::vector<PathORAM> sub_orams;
     
     // Eviction counters for each sub-ORAM to determine eviction paths
-    std::vector<int> eviction_counters;
+    int cnt{0};
 
     static int bit_reverse(int x, int bits);
-    int        next_eviction_leaf(int sub_oram_idx);
     long       node_offset(int sub_oram_idx, int node_idx) const;
 
-    Bucket read_node (int sub_oram_idx, int node_idx) const;
-    void   write_node(int sub_oram_idx, int node_idx, const Bucket& b);
     std::vector<Bucket> read_buckets(int sub_oram_idx, int level, int p);
     void write_buckets(int sub_oram_idx, int level, int p, const std::vector<Bucket>& buckets);
 
@@ -31,8 +28,7 @@ private:
 
     mutable std::mt19937 rng;
 
-    mutable long long total_node_read_count{0};
-    mutable long long total_node_write_count{0};
+    mutable long long total_seeks{0};
 public:
     rORAM(int N, int ell = 2, const std::string& filename_prefix = "roram");
     ~rORAM();
@@ -41,9 +37,6 @@ public:
 
     int get_ell() const { return ell; }
 
-    long long get_total_path_reads() const;
-    long long get_total_path_writes() const;
-    long long get_total_node_reads() const;
-    long long get_total_node_writes() const;
-    void reset_counts();
+    long long get_total_seeks() const { return total_seeks; }
+    void reset_counts() { total_seeks = 0; }
 };

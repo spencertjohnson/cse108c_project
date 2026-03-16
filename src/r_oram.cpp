@@ -17,7 +17,6 @@ rORAM::rORAM(int N_in,  int ell_in, const std::string& prefix) : N(N_in), ell(el
         sub_orams.emplace_back(N, fname);
     }
 
-    eviction_counters.resize(ell + 1, 0);
     int num_leaves = sub_orams[0].get_num_leaves();
 
     for (int i = 0; i <= ell; ++i) {
@@ -43,14 +42,6 @@ int rORAM::bit_reverse(int x, int bits) {
         x >>= 1;
     }
     return res;
-}
-
-int rORAM::next_eviction_leaf(int sub_oram_idx) {
-    int L = sub_orams[sub_oram_idx].get_L();
-    int cnt = eviction_counters[sub_oram_idx];
-    int leaf = bit_reverse(cnt % sub_orams[sub_oram_idx].get_num_leaves(), L);
-    eviction_counters[sub_oram_idx]++;
-    return leaf;
 }
 
 long rORAM::node_offset(int sub_oram_idx, int node_idx) const {
@@ -129,196 +120,215 @@ std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_
 }
 
 std::vector<Bucket> rORAM::read_buckets(int sub_oram_idx, int level, int p) {
-    PathORAM& oram  = sub_orams[sub_oram_idx];
-    int range_size  = 1 << sub_oram_idx;  // 2^i buckets to read
-    int num_leaves  = oram.get_num_leaves();
-    int L           = oram.get_L();
+    PathORAM& oram = sub_orams[sub_oram_idx];
+    int range_size = 1 << sub_oram_idx;  // 2^i
+    int L          = oram.get_L();
 
-    // Find the starting physical offset — the first bucket in the range at this level
-    int first_node = oram.node_at_level(p % num_leaves, level);
-    long offset = node_offset(sub_oram_idx, first_node);
+    int nodes_at_level = 1 << level;  // 2^j nodes at this level
+    int num_buckets    = std::min(range_size, nodes_at_level);
 
-    // Calculate how many unique buckets we need at this level
-    // At level j there are 2^j nodes, so we need min(2^i, 2^j) buckets
-    int nodes_at_level = 1 << (L - level);  // wait, this isn't right
-    int num_buckets = std::min(range_size, nodes_at_level);
+    // Get the node index of the first bucket we need
+    // node_at_level gives us the 1-indexed node for a given leaf and level
+    int first_node = oram.node_at_level(p % oram.get_num_leaves(), level);
+    long offset    = node_offset(sub_oram_idx, first_node);
 
-    // Read all num_buckets contiguously in one seek
+    // One seek, one read — all num_buckets are contiguous on disk
     std::vector<uint8_t> buf(num_buckets * DISK_BUCKET_SIZE);
     std::fstream& f = oram.get_file();
+
     f.seekg(offset, std::ios::beg);
+    total_seeks++;
     if (!f.good())
-        throw std::runtime_error("read_bucket: seek failed at level " + std::to_string(level));
+        throw std::runtime_error("read_bucket: seek failed at level "
+                                 + std::to_string(level));
+
     f.read(reinterpret_cast<char*>(buf.data()), num_buckets * DISK_BUCKET_SIZE);
     if (!f.good())
-        throw std::runtime_error("read_bucket: read failed at level " + std::to_string(level));
+        throw std::runtime_error("read_bucket: read failed at level "
+                                 + std::to_string(level));
 
-    // Deserialize each bucket
+    // Deserialize
     std::vector<Bucket> buckets(num_buckets);
-    for (int i = 0; i < num_buckets; ++i) {
+    for (int i = 0; i < num_buckets; ++i)
         buckets[i].deserialize(buf.data() + i * DISK_BUCKET_SIZE);
-    }
 
     return buckets;
 }
 
-void rORAM::BatchEvict(int sub_oram_idx, int num_evictions) {
-    PathORAM& po = sub_orams[sub_oram_idx];
-    int L = po.L;
+void rORAM::BatchEvict(int sub_oram_idx, int k) {
+    PathORAM& oram = sub_orams[sub_oram_idx];
+    int L          = oram.get_L();
+    int num_leaves = oram.get_num_leaves();
 
-    // Step 1: Determine target leaves for eviction
-    std::vector<int> leaves;
-    for (int k = 0; k < num_evictions; ++k) {
-        int leaf = bit_reverse(po.eviction_counter % po.num_leaves, L);
-        leaves.push_back(leaf);
-        po.eviction_counter++;
+    // Convert cnt to bit-reversed eviction paths
+    // cnt increments normally, but the actual paths are in bit-reversed order
+    std::vector<int> eviction_paths;
+    for (int t = cnt; t < cnt + k; ++t) {
+        eviction_paths.push_back(bit_reverse(t % num_leaves, L));
     }
 
-    // Step 2: Read Top-Down (0 to L)
+    // Steps 1-5: read buckets top-down
     for (int level = 0; level <= L; ++level) {
-        std::vector<int> unique_nodes;
-        for (int leaf : leaves) {
-            int node = po.node_at_level(leaf, level);
-            if (std::find(unique_nodes.begin(), unique_nodes.end(), node) == unique_nodes.end()) {
-                unique_nodes.push_back(node);
+        // Use first eviction path as starting point — they are contiguous
+        // in bit-reversed order so read_bucket reads them all in one seek
+        std::vector<Bucket> buckets = read_buckets(sub_oram_idx, level, eviction_paths[0]);
+
+        for (const Bucket& bucket : buckets) {
+            for (int b = 0; b < Z; ++b) {
+                const Block& block = bucket.blocks[b];
+                if (block.is_dummy()) continue;
+
+                bool already_in_stash = false;
+                for (const Block& s : oram.get_stash())
+                    if (s.id == block.id) { already_in_stash = true; break; }
+
+                if (!already_in_stash)
+                    oram.get_stash().push_back(block);
             }
-        }
-        for (int node : unique_nodes) {
-            po.read_node_into_stash(node);
         }
     }
 
-    // Step 3: Write Bottom-Up (L down to 0)
+    // Steps 6-11: evict bottom-up
+    std::vector<std::vector<Bucket>> write_back(L + 1);
+
     for (int level = L; level >= 0; --level) {
-        std::vector<int> unique_nodes;
-        for (int leaf : leaves) {
-            int node = po.node_at_level(leaf, level);
-            if (std::find(unique_nodes.begin(), unique_nodes.end(), node) == unique_nodes.end()) {
-                unique_nodes.push_back(node);
-            }
-        }
-        for (int node : unique_nodes) {
-            po.write_node_from_stash(node);
-        }
-    }
+        int nodes_at_level = 1 << level;
+        int num_buckets    = std::min(k, nodes_at_level);
+        write_back[level].resize(num_buckets);
 
-    // Flush once per batch eviction
-    if (po.tree_file && po.tree_file->is_open()) po.tree_file->flush();
-}
+        for (int idx = 0; idx < k; ++idx) {
+            int r          = eviction_paths[idx] % nodes_at_level;
+            int bucket_idx = idx % num_buckets;
+            int slots      = 0;
 
-std::vector<std::string> rORAM::access(int start_addr, int range, bool is_write, const std::vector<std::string>& data) {
-    if (start_addr < 0 || start_addr + range > N) throw std::out_of_range("range out of bounds");
-    if (range <= 0) throw std::invalid_argument("range size must be > 0");
-    if (is_write && data.size() != (size_t)range) throw std::invalid_argument("data size mismatch");
-    
-    int i = (range > 1) ? (int)std::ceil(std::log2((double)range)) : 0;
-    if (i > ell) throw std::invalid_argument("range size exceeds max supported");
-    int actual_range = 1 << i;
-    int a0 = (start_addr / actual_range) * actual_range;
-    
-    // 1. & 2. Perform two ReadRanges to cover the range [start_addr, start_addr + range)
-    std::vector<Block> fetched_blocks;
-    for (int a_prime : {a0, a0 + actual_range}) {
-        auto read_res = ReadRange(i, a_prime);
-        for (const auto& b : read_res.first) {
-            fetched_blocks.push_back(b);
-        }
-    }
-    
-    // 3. Remap
-    static thread_local std::mt19937 rng{std::random_device{}()};
-    for (int a_prime : {a0, a0 + actual_range}) {
-        std::vector<int> p_primes_per_suboram(ell + 1);
-        for (int j = 0; j <= ell; ++j) {
-            std::uniform_int_distribution<int> d(0, sub_orams[j].num_leaves_count() - 1);
-            p_primes_per_suboram[j] = d(rng);
-        }
-
-        for (int k = 0; k < actual_range; ++k) {
-            int addr = a_prime + k;
-            if (addr < N) {
-                for (int j = 0; j <= ell; ++j) {
-                    rpm[addr][j] = (p_primes_per_suboram[j] + k) % sub_orams[j].num_leaves_count();
-                    sub_orams[j].position_map[addr] = bit_reverse(rpm[addr][j], sub_orams[j].L);
+            for (auto it = oram.get_stash().begin();
+                 it != oram.get_stash().end() && slots < Z; ) {
+                if (it->tags[sub_oram_idx] % nodes_at_level == r) {
+                    write_back[level][bucket_idx].blocks[slots++] = *it;
+                    it = oram.get_stash().erase(it);
+                } else {
+                    ++it;
                 }
             }
         }
     }
-    
-    // 4. Update data if writing
-    std::vector<std::string> results;
-    if (!is_write) {
-        results.resize(range);
+
+    // Steps 12-13: write back level by level
+    for (int level = 0; level <= L; ++level) {
+        write_buckets(sub_oram_idx, level, eviction_paths[0], write_back[level]);
     }
-    
-    for (auto& b : fetched_blocks) {
-        if (b.id >= start_addr && b.id < start_addr + range) {
-            if (is_write) {
-                std::memset(b.data, 0, BLOCK_SIZE);
-                std::snprintf(b.data, BLOCK_SIZE, "%s", data[b.id - start_addr].c_str());
-                b.is_dummy = false;
-            } else if (!b.is_dummy) {
-                results[b.id - start_addr] = std::string(b.data);
+
+    oram.get_file().flush();
+}
+
+void rORAM::write_buckets(int sub_oram_idx, int level, int p, const std::vector<Bucket>& buckets) {
+    PathORAM& oram = sub_orams[sub_oram_idx];
+    int num_leaves = oram.get_num_leaves();
+
+    int num_buckets = buckets.size();
+
+    // Serialize all buckets into one contiguous buffer
+    std::vector<uint8_t> buf(num_buckets * DISK_BUCKET_SIZE);
+    for (int i = 0; i < num_buckets; ++i)
+        buckets[i].serialize(buf.data() + i * DISK_BUCKET_SIZE);
+
+    // One seek to the start of the contiguous range at this level
+    int first_node = oram.node_at_level(p % num_leaves, level);
+    long offset    = node_offset(sub_oram_idx, first_node);
+
+    std::fstream& f = oram.get_file();
+    f.seekp(offset, std::ios::beg);
+    total_seeks++;
+    if (!f.good())
+        throw std::runtime_error("write_bucket: seek failed at level "
+                                 + std::to_string(level));
+
+    // One write — all buckets in one sequential disk operation
+    f.write(reinterpret_cast<char*>(buf.data()), num_buckets * DISK_BUCKET_SIZE);
+    if (!f.good())
+        throw std::runtime_error("write_bucket: write failed at level "
+                                 + std::to_string(level));
+}
+
+void rORAM::access(int start_addr, int range, const uint8_t* data_in,
+                   bool is_write, uint8_t* data_out) {
+    if (start_addr < 0 || start_addr + range > N)
+        throw std::out_of_range("range out of bounds");
+    if (range <= 0)
+        throw std::invalid_argument("range must be > 0");
+
+    // Algorithm 3 Step 1: i = ceil(log2(r))
+    int i = (range > 1) ? (int)std::ceil(std::log2((double)range)) : 0;
+    if (i > ell)
+        throw std::invalid_argument("range exceeds max supported");
+
+    int actual_range = 1 << i;  // 2^i
+
+    // Step 2: a0 = floor(a / 2^i) * 2^i
+    int a0 = (start_addr / actual_range) * actual_range;
+
+    // Step 3: D <- {}
+    // Map of block_id -> Block for all fetched blocks
+    std::unordered_map<int, Block> fetched;
+
+    // Steps 4-7: two ReadRanges on R_i
+    for (int a_prime : {a0, a0 + actual_range}) {
+        auto [blocks, p_prime] = ReadRange(i, a_prime);
+
+        for (Block& b : blocks) {
+            // Step 7: update tags[i] for all blocks in range
+            // B_a'+j.pi <- p' + j
+            int j = b.id - a_prime;
+            b.tags[i] = (p_prime + j) % sub_orams[i].get_num_leaves();
+            fetched[b.id] = b;
+        }
+    }
+
+    // Steps 8-9: if write, update block data
+    if (is_write) {
+        for (int j = start_addr; j < start_addr + range; ++j) {
+            if (fetched.count(j)) {
+                std::memcpy(fetched[j].data, data_in + (j - start_addr) * BLOCK_SIZE, BLOCK_SIZE);
+            } else {
+                // Block not found — create it
+                Block b(j, data_in + (j - start_addr) * BLOCK_SIZE);
+                fetched[j] = b;
             }
         }
     }
-    
-    // 5. Update stashes and evict in each tree
+
+    // Return data if reading
+    if (!is_write && data_out != nullptr) {
+        for (int j = start_addr; j < start_addr + range; ++j) {
+            if (fetched.count(j) && !fetched[j].is_dummy())
+                std::memcpy(data_out + (j - start_addr) * BLOCK_SIZE,
+                            fetched[j].data, BLOCK_SIZE);
+            else
+                std::memset(data_out + (j - start_addr) * BLOCK_SIZE, 0, BLOCK_SIZE);
+        }
+    }
+
+    // Steps 10-13: update stashes and BatchEvict in each sub-ORAM
     for (int j = 0; j <= ell; ++j) {
-        auto it = std::remove_if(sub_orams[j].stash.begin(), sub_orams[j].stash.end(),
-            [a0, actual_range](const Block& b) {
+        // Step 11: remove stale blocks in range [a0, a0 + 2^(i+1)) from stash_j
+        auto& stash = sub_orams[j].get_stash();
+        stash.erase(
+            std::remove_if(stash.begin(), stash.end(), [&](const Block& b) {
                 return b.id >= a0 && b.id < a0 + 2 * actual_range;
-            });
-        sub_orams[j].stash.erase(it, sub_orams[j].stash.end());
-        
-        for (auto b : fetched_blocks) {
-            if (!b.is_dummy) {
-                b.tags = rpm[b.id]; 
-                sub_orams[j].stash.push_back(b);
-            }
+            }),
+            stash.end()
+        );
+
+        // Step 12: insert updated blocks into stash_j
+        for (auto& [id, b] : fetched) {
+            if (!b.is_dummy())
+                stash.push_back(b);
         }
-        
-        int num_evictions = 2 * actual_range;
-        BatchEvict(j, num_evictions);
-    }
-    
-    return results;
-}
 
-long long rORAM::get_total_path_reads() const {
-    long long total = 0;
-    for (const auto& oram : sub_orams) {
-        total += oram.get_path_read_count();
+        // Step 13: BatchEvict(2^(i+1)) to sub-ORAM R_j
+        BatchEvict(j, 2 * actual_range);
     }
-    return total;
-}
 
-long long rORAM::get_total_path_writes() const {
-    long long total = 0;
-    for (const auto& oram : sub_orams) {
-        total += oram.get_path_write_count();
-    }
-    return total;
-}
-
-long long rORAM::get_total_node_reads() const {
-    long long total = 0;
-    for (const auto& oram : sub_orams) {
-        total += oram.get_node_read_count();
-    }
-    return total;
-}
-
-long long rORAM::get_total_node_writes() const {
-    long long total = 0;
-    for (const auto& oram : sub_orams) {
-        total += oram.get_node_write_count();
-    }
-    return total;
-}
-
-void rORAM::reset_counts() {
-    for (auto& oram : sub_orams) {
-        oram.reset_counts();
-    }
+    // Step 14: advance global eviction counter
+    cnt += 2 * actual_range;
 }
