@@ -1,4 +1,3 @@
-/*
 #include "r_oram.hpp"
 #include <iostream>
 #include <cmath>
@@ -7,38 +6,32 @@
 #include <algorithm>
 #include <cstring>
 
-rORAM::rORAM(int N_in, int Z_in, int ell_in, const std::string& prefix) : N(N_in), Z(Z_in), ell(ell_in) {
+rORAM::rORAM(int N_in,  int ell_in, const std::string& prefix) : N(N_in), ell(ell_in) {
     if (N <= 0) throw std::invalid_argument("N must be > 0");
-    if (Z <= 0) throw std::invalid_argument("Z must be > 0");
     if (ell < 0) throw std::invalid_argument("ell must be >= 0");
+    
+    rng = std::mt19937{std::random_device{}()};
 
     for (int i = 0; i <= ell; ++i) {
         std::string fname = prefix + "_sub_" + std::to_string(i) + ".bin";
-        sub_orams.emplace_back(N, Z, fname, ell + 1);
-    }
-    
-    std::mt19937 rng{std::random_device{}()};
-    std::uniform_int_distribution<int> dist(0, sub_orams[0].num_leaves_count() - 1);
-    
-    for (int id = 0; id < N; id++) {
-        rpm[id] = std::vector<int>(ell + 1, 0);
-    }
-    
-    for (int i = 0; i <= ell; ++i) {
-        std::uniform_int_distribution<int> dist(0, sub_orams[i].num_leaves_count() - 1);
-        int chunk_size = 1 << i;
-        for (int start = 0; start < N; start += chunk_size) {
-            int base_p = dist(rng);
-            for (int k = 0; k < chunk_size && start + k < N; ++k) {
-                rpm[start + k][i] = (base_p + k) % sub_orams[i].num_leaves_count();
-            }
-        }
+        sub_orams.emplace_back(N, fname);
     }
 
-    // Sync sub_oram position_maps to initial rpm
+    eviction_counters.resize(ell + 1, 0);
+    int num_leaves = sub_orams[0].get_num_leaves();
+
     for (int i = 0; i <= ell; ++i) {
-        for (int id = 0; id < N; id++) {
-            sub_orams[i].position_map[id] = bit_reverse(rpm[id][i], sub_orams[i].L);
+        std::uniform_int_distribution<int> dist(0, num_leaves - 1);
+        int chunk_size = 1 << i;  // 2^i blocks per range in R_i
+
+        for (int start = 0; start < N; start += chunk_size) {
+            // Pick a random starting leaf for this range
+            int base_p = dist(rng);
+
+            // Assign consecutive leaves to all blocks in the range
+            for (int k = 0; k < chunk_size && start + k < N; ++k) {
+                sub_orams[i].set_position(start + k, (base_p + k) % num_leaves);
+            }
         }
     }
 }
@@ -52,57 +45,121 @@ int rORAM::bit_reverse(int x, int bits) {
     return res;
 }
 
+int rORAM::next_eviction_leaf(int sub_oram_idx) {
+    int L = sub_orams[sub_oram_idx].get_L();
+    int cnt = eviction_counters[sub_oram_idx];
+    int leaf = bit_reverse(cnt % sub_orams[sub_oram_idx].get_num_leaves(), L);
+    eviction_counters[sub_oram_idx]++;
+    return leaf;
+}
+
+long rORAM::node_offset(int sub_oram_idx, int node_idx) const {
+    int L          = sub_orams[sub_oram_idx].get_L();
+    int num_leaves = sub_orams[sub_oram_idx].get_num_leaves();
+
+    // Find the level of this node (root = level 0)
+    // Node 1 = level 0, nodes 2-3 = level 1, nodes 4-7 = level 2, etc.
+    int level = 0;
+    int boundary = 1;
+    while (node_idx >= 2 * boundary) {
+        boundary <<= 1;
+        level++;
+    }
+
+    // Position within this level (0-indexed)
+    int pos_in_level = node_idx - boundary;
+
+    // Bit-reverse the position within this level
+    // Level l has 2^l nodes, so we reverse l bits
+    int br_pos = bit_reverse(pos_in_level, level);
+
+    // Count all nodes in levels before this one
+    // Level 0 has 1 node, level 1 has 2, ..., level l has 2^l
+    // Total before level l = 2^l - 1
+    long nodes_before = (1 << level) - 1;
+
+    return (nodes_before + br_pos) * (long)DISK_BUCKET_SIZE;
+}
+
 std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_addr) {
-    PathORAM& po = sub_orams[sub_oram_idx];
-    int L = po.L;
-    int num_leaves = po.num_leaves_count();
-    int actual_range = 1 << sub_oram_idx; 
-    int old_br_start = (start_addr < N) ? rpm[start_addr][sub_oram_idx] : 0;
-    
-    static thread_local std::mt19937 rng{std::random_device{}()};
+    PathORAM& oram   = sub_orams[sub_oram_idx];
+    int range_size   = 1 << sub_oram_idx;  // 2^i
+    int num_leaves   = oram.get_num_leaves();
+    int L            = oram.get_L();
+
+    // Step 1: U = [start_addr, start_addr + 2^i)
+    // Step 2: scan stash first for blocks in U
+    std::vector<Block> result;
+    for (const Block& b : oram.get_stash()) {
+        if (!b.is_dummy() && b.id >= start_addr && b.id < start_addr + range_size)
+            result.push_back(b);
+    }
+
+    // Step 3: p <- PM_i.query(start_addr)
+    int p = oram.get_position(start_addr);
+
+    // Steps 4-5: p' <- random, PM_i.update(start_addr, p')
     std::uniform_int_distribution<int> dist(0, num_leaves - 1);
     int p_prime = dist(rng);
-    
-    // Step 1: Collect leaves for the range
-    std::vector<int> leaves;
-    for (int k = 0; k < actual_range; ++k) {
-        int phys_idx = (old_br_start + k) % num_leaves;
-        leaves.push_back(bit_reverse(phys_idx, L));
-    }
+    oram.set_position(start_addr, p_prime);
 
-    // Step 2: Read Top-Down level-by-level (0 to L)
+    // Steps 6-9: read level by level, collect blocks in range
+    // V = {v^(t mod 2^j)_j : t ∈ [p, p + 2^i)}
     for (int level = 0; level <= L; ++level) {
-        std::vector<int> unique_nodes;
-        for (int leaf : leaves) {
-            int node = po.node_at_level(leaf, level);
-            if (std::find(unique_nodes.begin(), unique_nodes.end(), node) == unique_nodes.end()) {
-                unique_nodes.push_back(node);
+        std::vector<Bucket> buckets = read_buckets(sub_oram_idx, level, p);
+
+        for (const Bucket& bucket : buckets) {
+            for (int k = 0; k < Z; ++k) {
+                const Block& b = bucket.blocks[k];
+                if (b.is_dummy()) continue;
+
+                // Step 9: add if in range U and not already found (handles duplicates)
+                bool in_range = (b.id >= start_addr && b.id < start_addr + range_size);
+                bool already_found = false;
+                for (const Block& r : result)
+                    if (r.id == b.id) { already_found = true; break; }
+
+                if (in_range && !already_found)
+                    result.push_back(b);
             }
-        }
-        for (int node : unique_nodes) {
-            po.read_node_into_stash(node);
         }
     }
 
-    // Step 3: Retrieve blocks from stash
-    std::vector<Block> range_blocks;
-    for (int k = 0; k < actual_range; ++k) {
-        int addr = start_addr + k;
-        bool found = false;
-        for (Block& b : po.stash) {
-            if (b.id == addr && !b.is_dummy) {
-                range_blocks.push_back(b);
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            Block empty_block(addr, "");
-            range_blocks.push_back(empty_block);
-        }
+    return {result, p_prime};
+}
+
+std::vector<Bucket> rORAM::read_buckets(int sub_oram_idx, int level, int p) {
+    PathORAM& oram  = sub_orams[sub_oram_idx];
+    int range_size  = 1 << sub_oram_idx;  // 2^i buckets to read
+    int num_leaves  = oram.get_num_leaves();
+    int L           = oram.get_L();
+
+    // Find the starting physical offset — the first bucket in the range at this level
+    int first_node = oram.node_at_level(p % num_leaves, level);
+    long offset = node_offset(sub_oram_idx, first_node);
+
+    // Calculate how many unique buckets we need at this level
+    // At level j there are 2^j nodes, so we need min(2^i, 2^j) buckets
+    int nodes_at_level = 1 << (L - level);  // wait, this isn't right
+    int num_buckets = std::min(range_size, nodes_at_level);
+
+    // Read all num_buckets contiguously in one seek
+    std::vector<uint8_t> buf(num_buckets * DISK_BUCKET_SIZE);
+    std::fstream& f = oram.get_file();
+    f.seekg(offset, std::ios::beg);
+    if (!f.good())
+        throw std::runtime_error("read_bucket: seek failed at level " + std::to_string(level));
+    f.read(reinterpret_cast<char*>(buf.data()), num_buckets * DISK_BUCKET_SIZE);
+    if (!f.good())
+        throw std::runtime_error("read_bucket: read failed at level " + std::to_string(level));
+
+    // Deserialize each bucket
+    std::vector<Bucket> buckets(num_buckets);
+    for (int i = 0; i < num_buckets; ++i) {
+        buckets[i].deserialize(buf.data() + i * DISK_BUCKET_SIZE);
     }
-    
-    return {range_blocks, p_prime};
+
+    return buckets;
 }
 
 void rORAM::BatchEvict(int sub_oram_idx, int num_evictions) {
@@ -265,4 +322,3 @@ void rORAM::reset_counts() {
         oram.reset_counts();
     }
 }
-*/

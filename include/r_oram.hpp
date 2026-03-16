@@ -10,12 +10,10 @@
 class rORAM {
 private:
     int ell; // Number of sub-ORAMs - 1 (max range size = 2^ell)
+    int N;
     
     std::vector<PathORAM> sub_orams;
     
-    // Distributed position map: block_id -> array of bit-reversed positions (one per sub-ORAM)
-    std::unordered_map<int, std::vector<int>> rpm;
-
     // Eviction counters for each sub-ORAM to determine eviction paths
     std::vector<int> eviction_counters;
 
@@ -25,8 +23,8 @@ private:
 
     Bucket read_node (int sub_oram_idx, int node_idx) const;
     void   write_node(int sub_oram_idx, int node_idx, const Bucket& b);
-    std::vector<Bucket> read_bucket (int sub_oram_idx, int level, int p);
-    void write_bucket(int sub_oram_idx, int level, int p, const std::vector<Bucket>& buckets);
+    std::vector<Bucket> read_buckets(int sub_oram_idx, int level, int p);
+    void write_buckets(int sub_oram_idx, int level, int p, const std::vector<Bucket>& buckets);
 
     std::pair<std::vector<Block>, int> ReadRange(int sub_oram_idx, int start_addr);
     void BatchEvict(int sub_oram_idx, int num_evictions);

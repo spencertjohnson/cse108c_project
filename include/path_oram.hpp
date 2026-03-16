@@ -52,6 +52,13 @@ public:
     int get_N() const { return N; }
     int get_L() const { return L; }
     int get_num_leaves() const { return num_leaves; }
+    void set_position(int block_id, int leaf) { position_map[block_id] = leaf; }
+    std::vector<Block>& get_stash() { return stash; }
+    bool has_position(int block_id) const { return position_map.count(block_id) > 0; }
+    int get_position(int block_id) const { return position_map.at(block_id); }
+    void set_position(int block_id, int leaf) { position_map[block_id] = leaf; }
+
+
 
     // helper
     int node_at_level(int leaf, int level) const;
