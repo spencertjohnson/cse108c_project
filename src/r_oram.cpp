@@ -92,7 +92,10 @@ std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_
     // Steps 4-5: p' <- random, PM_i.update(start_addr, p')
     std::uniform_int_distribution<int> dist(0, num_leaves - 1);
     int p_prime = dist(rng);
-    oram.set_position(start_addr, p_prime);
+    for (int k = 0; k < range_size; ++k) {
+    if (start_addr + k < N)
+        oram.set_position(start_addr + k, (p_prime + k) % num_leaves);
+    }
 
     // Steps 6-9: read level by level, collect blocks in range
     // V = {v^(t mod 2^j)_j : t ∈ [p, p + 2^i)}
