@@ -13,6 +13,7 @@ rORAM::rORAM(int N_in,  int ell_in, const std::string& prefix) : N(N_in), ell(el
     rng = std::mt19937{std::random_device{}()};
 
     sub_orams.reserve(ell + 1);
+    io_buf.resize(MAX_TAGS * DISK_BUCKET_SIZE);
 
     for (int i = 0; i <= ell; ++i) {
         std::string fname = prefix + "_sub_" + std::to_string(i) + ".bin";
@@ -56,26 +57,14 @@ long rORAM::node_offset(int node_idx) const {
         level++;
     }
 
-    // Position within this level (0-indexed)
     int pos_in_level = node_idx - boundary;
-
-    // Bit-reverse the position within this level
-    // Level l has 2^l nodes, so we reverse l bits
     int br_pos = bit_reverse(pos_in_level, level);
-
-    // Count all nodes in levels before this one
-    // Level 0 has 1 node, level 1 has 2, ..., level l has 2^l
-    // Total before level l = 2^l - 1
     long nodes_before = (1 << level) - 1;
 
     return (nodes_before + br_pos) * (long)DISK_BUCKET_SIZE;
 }
 
 std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_addr) {
-    std::cerr << "ReadRange: sub_oram_idx=" << sub_oram_idx 
-              << " start_addr=" << start_addr 
-              << " sub_orams.size()=" << sub_orams.size() << "\n";
-
     if (sub_oram_idx < 0 || sub_oram_idx >= (int)sub_orams.size())
         throw std::runtime_error("ReadRange: invalid sub_oram_idx " +
                                  std::to_string(sub_oram_idx));
@@ -85,42 +74,30 @@ std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_
     int num_leaves = oram.get_num_leaves();
     int L          = oram.get_L();
 
-    std::cerr << "ReadRange: range_size=" << range_size 
-              << " num_leaves=" << num_leaves 
-              << " L=" << L << "\n";
-
     // Step 2: scan stash first
     std::vector<Block> result;
-    std::cerr << "ReadRange: scanning stash (size=" << oram.get_stash().size() << ")\n";
     for (const Block& b : oram.get_stash()) {
         if (!b.is_dummy() && b.id >= start_addr && b.id < start_addr + range_size)
             result.push_back(b);
     }
-    std::cerr << "ReadRange: stash scan done, result.size()=" << result.size() << "\n";
 
     // Step 3: p <- PM_i.query(start_addr)
-    std::cerr << "ReadRange: checking position for start_addr=" << start_addr << "\n";
     if (!oram.has_position(start_addr))
         throw std::runtime_error("ReadRange: no position for block " +
                                  std::to_string(start_addr));
     int p = oram.get_position(start_addr);
-    std::cerr << "ReadRange: p=" << p << "\n";
 
     // Steps 4-5: p' <- random, update positions
     std::uniform_int_distribution<int> dist(0, num_leaves - 1);
     int p_prime = dist(rng);
-    std::cerr << "ReadRange: p_prime=" << p_prime << "\n";
     for (int k = 0; k < range_size; ++k) {
         if (start_addr + k < N)
             oram.set_position(start_addr + k, (p_prime + k) % num_leaves);
     }
-    std::cerr << "ReadRange: positions updated\n";
 
     // Steps 6-9: read level by level
     for (int level = 0; level <= L; ++level) {
-        std::cerr << "ReadRange: reading level=" << level << "\n";
         std::vector<Bucket> buckets = read_buckets(sub_oram_idx, level, p);
-        std::cerr << "ReadRange: got " << buckets.size() << " buckets at level=" << level << "\n";
 
         for (const Bucket& bucket : buckets) {
             for (int k = 0; k < Z; ++k) {
@@ -137,13 +114,8 @@ std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_
             }
         }
     }
-    std::cerr << "ReadRange: done, result.size()=" << result.size() << "\n";
-    std::cerr << "ReadRange: constructing return pair\n";
-    auto ret = std::make_pair(result, p_prime);
-    std::cerr << "ReadRange: pair constructed\n";
-    return ret;
 
-//    return {result, p_prime};
+    return {result, p_prime};
 }
 
 std::vector<Bucket> rORAM::read_buckets(int sub_oram_idx, int level, int p) {
@@ -201,62 +173,14 @@ std::vector<Bucket> rORAM::read_buckets(int sub_oram_idx, int level, int p) {
     return buckets;
 }
 
-/*
-std::vector<Bucket> rORAM::read_buckets(int sub_oram_idx, int level, int p) {
-    PathORAM& oram = sub_orams[sub_oram_idx];
-    int range_size = 1 << sub_oram_idx;  // 2^i
-    int nodes_at_level = 1 << level;  // 2^j nodes at this level
-    int num_buckets    = std::min(range_size, nodes_at_level);
-
-    std::cerr << "read_buckets: DISK_BUCKET_SIZE=" << DISK_BUCKET_SIZE 
-          << " num_buckets=" << num_buckets
-          << " buf size=" << num_buckets * DISK_BUCKET_SIZE << "\n";
-
-    // Get the node index of the first bucket we need
-    // node_at_level gives us the 1-indexed node for a given leaf and level
-    int first_node = oram.node_at_level(p % oram.get_num_leaves(), level);
-    long offset    = node_offset(first_node);
-
-    // One seek, one read — all num_buckets are contiguous on disk
-    std::vector<uint8_t> buf(num_buckets * DISK_BUCKET_SIZE);
-    std::fstream& f = oram.get_file();
-
-    f.seekg(offset, std::ios::beg);
-    total_seeks++;
-    if (!f.good())
-        throw std::runtime_error("read_bucket: seek failed at level "
-                                 + std::to_string(level));
-
-    f.read(reinterpret_cast<char*>(buf.data()), num_buckets * DISK_BUCKET_SIZE);
-    if (!f.good())
-        throw std::runtime_error("read_bucket: read failed at level "
-                                 + std::to_string(level));
-
-    // Deserialize
-    std::vector<Bucket> buckets(num_buckets);
-    for (int i = 0; i < num_buckets; ++i)
-        buckets[i].deserialize(buf.data() + i * DISK_BUCKET_SIZE);
-
-    return buckets;
-}*/
-
 void rORAM::BatchEvict(int sub_oram_idx, int k) {
     PathORAM& oram = sub_orams[sub_oram_idx];
     int L          = oram.get_L();
     int num_leaves = oram.get_num_leaves();
 
-    // Convert cnt to bit-reversed eviction paths
-    // cnt increments normally, but the actual paths are in bit-reversed order
-    std::vector<int> eviction_paths;
-    for (int t = cnt; t < cnt + k; ++t) {
-        eviction_paths.push_back(bit_reverse(t % num_leaves, L));
-    }
-
     // Steps 1-5: read buckets top-down
     for (int level = 0; level <= L; ++level) {
-        // Use first eviction path as starting point — they are contiguous
-        // in bit-reversed order so read_bucket reads them all in one seek
-        std::vector<Bucket> buckets = read_buckets(sub_oram_idx, level, eviction_paths[0]);
+        std::vector<Bucket> buckets = read_buckets(sub_oram_idx, level, bit_reverse(cnt % num_leaves, L));
 
         for (const Bucket& bucket : buckets) {
             for (int b = 0; b < Z; ++b) {
@@ -282,7 +206,7 @@ void rORAM::BatchEvict(int sub_oram_idx, int k) {
         write_back[level].resize(num_buckets);
 
         for (int idx = 0; idx < k; ++idx) {
-            int r          = eviction_paths[idx] % nodes_at_level;
+            int r          = bit_reverse((cnt + idx) % num_leaves, L);
             int bucket_idx = idx % num_buckets;
             int slots      = 0;
 
@@ -300,41 +224,11 @@ void rORAM::BatchEvict(int sub_oram_idx, int k) {
 
     // Steps 12-13: write back level by level
     for (int level = 0; level <= L; ++level) {
-        write_buckets(sub_oram_idx, level, eviction_paths[0], write_back[level]);
+        write_buckets(sub_oram_idx, level, bit_reverse(cnt % num_leaves, L), write_back[level]);
     }
 
     oram.get_file().flush();
 }
-
-/*
-void rORAM::write_buckets(int sub_oram_idx, int level, int p, const std::vector<Bucket>& buckets) {
-    PathORAM& oram = sub_orams[sub_oram_idx];
-    int num_leaves = oram.get_num_leaves();
-
-    int num_buckets = buckets.size();
-
-    // Serialize all buckets into one contiguous buffer
-    std::vector<uint8_t> buf(num_buckets * DISK_BUCKET_SIZE);
-    for (int i = 0; i < num_buckets; ++i)
-        buckets[i].serialize(buf.data() + i * DISK_BUCKET_SIZE);
-
-    // One seek to the start of the contiguous range at this level
-    int first_node = oram.node_at_level(p % num_leaves, level);
-    long offset    = node_offset(first_node);
-
-    std::fstream& f = oram.get_file();
-    f.seekp(offset, std::ios::beg);
-    total_seeks++;
-    if (!f.good())
-        throw std::runtime_error("write_bucket: seek failed at level "
-                                 + std::to_string(level));
-
-    // One write — all buckets in one sequential disk operation
-    f.write(reinterpret_cast<char*>(buf.data()), num_buckets * DISK_BUCKET_SIZE);
-    if (!f.good())
-        throw std::runtime_error("write_bucket: write failed at level "
-                                 + std::to_string(level));
-}*/
 
 void rORAM::write_buckets(int sub_oram_idx, int level, int p,
                            const std::vector<Bucket>& buckets) {
@@ -394,33 +288,24 @@ void rORAM::access(int start_addr, int range, const uint8_t* data_in, bool is_wr
     if (range <= 0)
         throw std::invalid_argument("range must be > 0");
 
-    std::cerr << "access: start=" << start_addr << " range=" << range << "\n";
-
     // Algorithm 3 Step 1: i = ceil(log2(r))
     int i = (range > 1) ? (int)std::ceil(std::log2((double)range)) : 0;
     if (i > ell)
         throw std::invalid_argument("range exceeds max supported");
-    std::cerr << "access: i=" << i << " ell=" << ell << "\n";
 
     int actual_range = 1 << i;  // 2^i
 
     // Step 2: a0 = floor(a / 2^i) * 2^i
     int a0 = (start_addr / actual_range) * actual_range;
-    std::cerr << "access: actual_range=" << actual_range << " a0=" << a0 << "\n";
 
     // Step 3: D <- {}
-    // Map of block_id -> Block for all fetched blocks
     std::unordered_map<int, Block> fetched;
 
     // Steps 4-7: two ReadRanges on R_i
     for (int a_prime : {a0, (a0 + actual_range) % N}) {
-        std::cerr << "access: starting ReadRange \n";
         auto [blocks, p_prime] = ReadRange(i, a_prime);
-        std::cerr << "access: ReadRange done\n";
 
         for (Block& b : blocks) {
-            // Step 7: update tags[i] for all blocks in range
-            // B_a'+j.pi <- p' + j
             int j = b.id - a_prime;
             b.tags[i] = (p_prime + j) % sub_orams[i].get_num_leaves();
             fetched[b.id] = b;
@@ -433,7 +318,6 @@ void rORAM::access(int start_addr, int range, const uint8_t* data_in, bool is_wr
             if (fetched.count(j)) {
                 std::memcpy(fetched[j].data, data_in + (j - start_addr) * BLOCK_SIZE, BLOCK_SIZE);
             } else {
-                // Block not found — create it
                 Block b(j, data_in + (j - start_addr) * BLOCK_SIZE);
                 fetched[j] = b;
             }
@@ -453,7 +337,7 @@ void rORAM::access(int start_addr, int range, const uint8_t* data_in, bool is_wr
 
     // Steps 10-13: update stashes and BatchEvict in each sub-ORAM
     for (int j = 0; j <= ell; ++j) {
-        // Step 11: remove stale blocks in range [a0, a0 + 2^(i+1)) from stash_j
+        // Step 11: remove stale blocks
         auto& stash = sub_orams[j].get_stash();
         stash.erase(
             std::remove_if(stash.begin(), stash.end(), [&](const Block& b) {
@@ -462,13 +346,13 @@ void rORAM::access(int start_addr, int range, const uint8_t* data_in, bool is_wr
             stash.end()
         );
 
-        // Step 12: insert updated blocks into stash_j
+        // Step 12: insert updated blocks
         for (auto& [id, b] : fetched) {
             if (!b.is_dummy())
                 stash.push_back(b);
         }
 
-        // Step 13: BatchEvict(2^(i+1)) to sub-ORAM R_j
+        // Step 13: BatchEvict(2^(i+1))
         BatchEvict(j, 2 * actual_range);
     }
 

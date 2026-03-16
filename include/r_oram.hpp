@@ -27,6 +27,7 @@ private:
     void BatchEvict(int sub_oram_idx, int num_evictions);
 
     mutable std::mt19937 rng;
+    std::vector<uint8_t> io_buf;
 
     mutable long long total_seeks{0};
 public:
