@@ -9,8 +9,8 @@
 
 class rORAM {
 private:
-    int ell; // Number of sub-ORAMs - 1 (max range size = 2^ell)
     int N;
+    int ell; // Number of sub-ORAMs - 1 (max range size = 2^ell)
     
     std::vector<PathORAM> sub_orams;
     
@@ -18,7 +18,7 @@ private:
     int cnt{0};
 
     static int bit_reverse(int x, int bits);
-    long       node_offset(int sub_oram_idx, int node_idx) const;
+    long       node_offset(int node_idx) const;
 
     std::vector<Bucket> read_buckets(int sub_oram_idx, int level, int p);
     void write_buckets(int sub_oram_idx, int level, int p, const std::vector<Bucket>& buckets);

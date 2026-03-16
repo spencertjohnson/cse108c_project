@@ -12,6 +12,8 @@ rORAM::rORAM(int N_in,  int ell_in, const std::string& prefix) : N(N_in), ell(el
     
     rng = std::mt19937{std::random_device{}()};
 
+    sub_orams.reserve(ell + 1);
+
     for (int i = 0; i <= ell; ++i) {
         std::string fname = prefix + "_sub_" + std::to_string(i) + ".bin";
         sub_orams.emplace_back(N, fname);
@@ -35,6 +37,8 @@ rORAM::rORAM(int N_in,  int ell_in, const std::string& prefix) : N(N_in), ell(el
     }
 }
 
+rORAM::~rORAM() = default;
+
 int rORAM::bit_reverse(int x, int bits) {
     int res = 0;
     for (int i = 0; i < bits; ++i) {
@@ -44,12 +48,7 @@ int rORAM::bit_reverse(int x, int bits) {
     return res;
 }
 
-long rORAM::node_offset(int sub_oram_idx, int node_idx) const {
-    int L          = sub_orams[sub_oram_idx].get_L();
-    int num_leaves = sub_orams[sub_oram_idx].get_num_leaves();
-
-    // Find the level of this node (root = level 0)
-    // Node 1 = level 0, nodes 2-3 = level 1, nodes 4-7 = level 2, etc.
+long rORAM::node_offset(int node_idx) const {
     int level = 0;
     int boundary = 1;
     while (node_idx >= 2 * boundary) {
@@ -125,7 +124,6 @@ std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_
 std::vector<Bucket> rORAM::read_buckets(int sub_oram_idx, int level, int p) {
     PathORAM& oram = sub_orams[sub_oram_idx];
     int range_size = 1 << sub_oram_idx;  // 2^i
-    int L          = oram.get_L();
 
     int nodes_at_level = 1 << level;  // 2^j nodes at this level
     int num_buckets    = std::min(range_size, nodes_at_level);
@@ -133,7 +131,7 @@ std::vector<Bucket> rORAM::read_buckets(int sub_oram_idx, int level, int p) {
     // Get the node index of the first bucket we need
     // node_at_level gives us the 1-indexed node for a given leaf and level
     int first_node = oram.node_at_level(p % oram.get_num_leaves(), level);
-    long offset    = node_offset(sub_oram_idx, first_node);
+    long offset    = node_offset(first_node);
 
     // One seek, one read — all num_buckets are contiguous on disk
     std::vector<uint8_t> buf(num_buckets * DISK_BUCKET_SIZE);
@@ -237,7 +235,7 @@ void rORAM::write_buckets(int sub_oram_idx, int level, int p, const std::vector<
 
     // One seek to the start of the contiguous range at this level
     int first_node = oram.node_at_level(p % num_leaves, level);
-    long offset    = node_offset(sub_oram_idx, first_node);
+    long offset    = node_offset(first_node);
 
     std::fstream& f = oram.get_file();
     f.seekp(offset, std::ios::beg);

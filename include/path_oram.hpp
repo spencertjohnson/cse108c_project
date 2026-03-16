@@ -43,6 +43,9 @@ public:
     PathORAM(int N, const std::string& filename = "");
     ~PathORAM();
 
+    PathORAM(PathORAM&&) noexcept = default;
+    PathORAM& operator=(PathORAM&&) noexcept = default;
+
     void access(int block_id, const uint8_t* data, bool is_write, uint8_t *data_out);
 
     // functions for rORAM
@@ -56,7 +59,6 @@ public:
     std::vector<Block>& get_stash() { return stash; }
     bool has_position(int block_id) const { return position_map.count(block_id) > 0; }
     int get_position(int block_id) const { return position_map.at(block_id); }
-    void set_position(int block_id, int leaf) { position_map[block_id] = leaf; }
 
 
 
