@@ -83,6 +83,86 @@ void PathORAM::print_path_to_leaf(int leaf) const{
 }
 
 
+int PathORAM::get_bit_reversed_index(int x, int bits) const {
+    int res = 0;
+    for (int i = 0; i < bits; ++i) {
+        res = (res << 1) | (x & 1);
+        x >>= 1;
+    }
+    return res;
+}
+
+
+void PathORAM::batch_evict(int k) {
+    // Evict k random paths (for testing eviction scheduling)
+    for (int i = 0; i < k; i++) {
+        int leaf = get_bit_reversed_index(eviction_cnt++ % num_leaves, L);
+
+        for (int level = 0; level <= L; ++level) {
+            read_level(leaf, level, k);
+        }
+
+        for (int level = L; level >= 0; --level) {
+            write_level(leaf, level, k);
+        }
+    }
+}
+
+
+void PathORAM::read_level(int leaf, int level, int k) {
+    int first_node = node_at_level(leaf, level);
+    long offset    = (long)(first_node - 1) * DISK_BUCKET_SIZE;
+
+    // Read k contiguous buckets in one seek
+    std::vector<uint8_t> buf(k * DISK_BUCKET_SIZE);
+    tree_file->seekg(offset, std::ios::beg);
+    ++seek_count;
+    tree_file->read(reinterpret_cast<char*>(buf.data()), k * DISK_BUCKET_SIZE);
+
+    // Deserialize and push real blocks into stash
+    for (int i = 0; i < k; ++i) {
+        Bucket b;
+        b.deserialize(buf.data() + i * DISK_BUCKET_SIZE);
+        for (int j = 0; j < Z; ++j) {
+            if (!b.blocks[j].is_dummy())
+                stash.push_back(b.blocks[j]);
+        }
+    }
+    node_read_count += k;
+}
+
+void PathORAM::write_level(int leaf, int level, int k) {
+    int first_node = node_at_level(leaf, level);
+    long offset    = (long)(first_node - 1) * DISK_BUCKET_SIZE;
+
+    std::vector<uint8_t> buf(k * DISK_BUCKET_SIZE);
+
+    for (int i = 0; i < k; ++i) {
+        // For each of the k nodes, greedily fill from stash
+        int node_leaf = leaf + i;  // each path's leaf at this level
+        Bucket b;
+        int slots = 0;
+        for (auto it = stash.begin(); it != stash.end() && slots < Z; ) {
+            auto pos_it = position_map.find(it->id);
+            if (pos_it == position_map.end()) { ++it; continue; }
+            if (node_at_level(pos_it->second, level) == node_at_level(node_leaf, level)) {
+                b.blocks[slots++] = *it;
+                it = stash.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        b.serialize(buf.data() + i * DISK_BUCKET_SIZE);
+    }
+
+    // Write all k buckets in one seek
+    tree_file->seekp(offset, std::ios::beg);
+    ++seek_count;
+    tree_file->write(reinterpret_cast<char*>(buf.data()), k * DISK_BUCKET_SIZE);
+    node_write_count += k;
+}
+
+
 void PathORAM::access(int block_id, const uint8_t* data_in, bool is_write, uint8_t* data_out) {
     if (block_id < 0 || block_id >= N)
     throw std::invalid_argument("block_id out of range");
@@ -92,7 +172,7 @@ void PathORAM::access(int block_id, const uint8_t* data_in, bool is_write, uint8
     // if block hasnt been accessed, pick a random position for it
     int x = (it != position_map.end()) ? it->second : random_leaf();
 
-    // Line 2 Remap the block to a new leaf
+    // Line 2 remap
     position_map[block_id] = random_leaf();
 
     // Line 3-5 read the path into stash
@@ -129,15 +209,7 @@ void PathORAM::access(int block_id, const uint8_t* data_in, bool is_write, uint8
             stash.emplace_back(block_id, data_in);
         }
     }
-
-    // Line 10-15 write path back from the stash
-    for (int level = L; level >= 0; --level) {
-        int node_idx = node_at_level(x, level);
-        write_bucket(node_idx, x, level);
-    }
-
     ++path_read_count;
-    ++path_write_count;
 }
 
 

@@ -15,6 +15,8 @@ private:
 
     int num_leaves; // number of leaves (power of 2)
     int num_nodes;  // total nodes = 2*num_leaves - 1
+
+    int eviction_cnt = 0; // for eviction scheduling
     
     // Server Storage (Disk-backed)
     std::string tree_filename;
@@ -27,21 +29,28 @@ private:
     int random_leaf() const;
 
     // Disk Helpers
+    void read_level(int leaf, int level, int k);
+    void write_level(int leaf, int level, int k);
     void read_bucket(int node_idx);
     void write_bucket(int node_idx, int leaf_x, int level);
-    Bucket read_node(int node_idx) const;
     void write_node(int node_idx, const Bucket& b);
+    Bucket read_node(int node_idx) const;
+
+    int get_bit_reversed_index(int idx, int bits) const;
 
     mutable long long path_read_count{0};
     mutable long long path_write_count{0};
     mutable long long node_read_count{0};
     mutable long long node_write_count{0};
+    mutable long long seek_count{0};
 
     mutable std::mt19937 rng;
 
 public:
     PathORAM(int N, const std::string& filename = "");
     ~PathORAM();
+
+    void batch_evict(int k);
 
     PathORAM(PathORAM&&) noexcept = default;
     PathORAM& operator=(PathORAM&&) noexcept = default;
@@ -80,9 +89,11 @@ public:
     long long get_path_write_count() const { return (long long)path_write_count; }
     long long get_node_read_count() const { return node_read_count; }
     long long get_node_write_count() const { return node_write_count; }
+    long long get_seek_count() const { return seek_count; }
 
     void reset_counts() { 
         path_read_count = 0; path_write_count = 0; 
         node_read_count = 0; node_write_count = 0;
+        seek_count = 0;
     }
 };
