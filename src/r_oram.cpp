@@ -72,9 +72,10 @@ long rORAM::node_offset(int node_idx) const {
 }
 
 std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_addr) {
-    std::cerr << "ReadRange: sub_oram_idx=" << sub_oram_idx 
+    /* std::cerr << "ReadRange: sub_oram_idx=" << sub_oram_idx 
               << " start_addr=" << start_addr 
               << " sub_orams.size()=" << sub_orams.size() << "\n";
+        */
 
     if (sub_oram_idx < 0 || sub_oram_idx >= (int)sub_orams.size())
         throw std::runtime_error("ReadRange: invalid sub_oram_idx " +
@@ -85,42 +86,43 @@ std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_
     int num_leaves = oram.get_num_leaves();
     int L          = oram.get_L();
 
+    /*
     std::cerr << "ReadRange: range_size=" << range_size 
               << " num_leaves=" << num_leaves 
               << " L=" << L << "\n";
-
+    */
     // Step 2: scan stash first
     std::vector<Block> result;
-    std::cerr << "ReadRange: scanning stash (size=" << oram.get_stash().size() << ")\n";
+    // std::cerr << "ReadRange: scanning stash (size=" << oram.get_stash().size() << ")\n";
     for (const Block& b : oram.get_stash()) {
         if (!b.is_dummy() && b.id >= start_addr && b.id < start_addr + range_size)
             result.push_back(b);
     }
-    std::cerr << "ReadRange: stash scan done, result.size()=" << result.size() << "\n";
+    // std::cerr << "ReadRange: stash scan done, result.size()=" << result.size() << "\n";
 
     // Step 3: p <- PM_i.query(start_addr)
-    std::cerr << "ReadRange: checking position for start_addr=" << start_addr << "\n";
+    // std::cerr << "ReadRange: checking position for start_addr=" << start_addr << "\n";
     if (!oram.has_position(start_addr))
         throw std::runtime_error("ReadRange: no position for block " +
                                  std::to_string(start_addr));
     int p = oram.get_position(start_addr);
-    std::cerr << "ReadRange: p=" << p << "\n";
+    // std::cerr << "ReadRange: p=" << p << "\n";
 
     // Steps 4-5: p' <- random, update positions
     std::uniform_int_distribution<int> dist(0, num_leaves - 1);
     int p_prime = dist(rng);
-    std::cerr << "ReadRange: p_prime=" << p_prime << "\n";
+    // std::cerr << "ReadRange: p_prime=" << p_prime << "\n";
     for (int k = 0; k < range_size; ++k) {
         if (start_addr + k < N)
             oram.set_position(start_addr + k, (p_prime + k) % num_leaves);
     }
-    std::cerr << "ReadRange: positions updated\n";
+    // std::cerr << "ReadRange: positions updated\n";
 
     // Steps 6-9: read level by level
     for (int level = 0; level <= L; ++level) {
-        std::cerr << "ReadRange: reading level=" << level << "\n";
+        // std::cerr << "ReadRange: reading level=" << level << "\n";
         std::vector<Bucket> buckets = read_buckets(sub_oram_idx, level, p);
-        std::cerr << "ReadRange: got " << buckets.size() << " buckets at level=" << level << "\n";
+        // std::cerr << "ReadRange: got " << buckets.size() << " buckets at level=" << level << "\n";
 
         for (const Bucket& bucket : buckets) {
             for (int k = 0; k < Z; ++k) {
@@ -137,10 +139,10 @@ std::pair<std::vector<Block>, int> rORAM::ReadRange(int sub_oram_idx, int start_
             }
         }
     }
-    std::cerr << "ReadRange: done, result.size()=" << result.size() << "\n";
-    std::cerr << "ReadRange: constructing return pair\n";
+    // std::cerr << "ReadRange: done, result.size()=" << result.size() << "\n";
+    // std::cerr << "ReadRange: constructing return pair\n";
     auto ret = std::make_pair(result, p_prime);
-    std::cerr << "ReadRange: pair constructed\n";
+    // std::cerr << "ReadRange: pair constructed\n";
     return ret;
 
 //    return {result, p_prime};
