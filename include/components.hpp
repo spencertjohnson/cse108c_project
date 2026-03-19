@@ -10,11 +10,9 @@ struct Block {
 
     Block() = default;
 
-    explicit Block(int block_size)
-        : id(-1), data(block_size, 0) {}
+    explicit Block(int block_size) : id(-1), data(block_size, 0) {}
 
-    Block(int id_, const uint8_t* data_, int block_size)
-        : id(id_), data(data_, data_ + block_size) {}
+    Block(int id_, const uint8_t* data_, int block_size) : id(id_), data(data_, data_ + block_size) {}
 
     bool is_dummy() const { return id == -1; }
 
