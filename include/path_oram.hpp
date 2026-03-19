@@ -28,10 +28,9 @@ private:
     Bucket read_node(int node_idx) const;
     void write_node(int node_idx, const Bucket& b);
 
-    mutable long long path_read_count{0};
-    mutable long long path_write_count{0};
-    mutable long long node_read_count{0};
-    mutable long long node_write_count{0};
+    mutable long long seek_count{0};
+    mutable long long bytes_read{0};
+    mutable long long bytes_written{0};
     mutable std::mt19937 rng;
 
 public:
@@ -61,12 +60,11 @@ public:
     void print_tree_structure() const;
     void print_path_to_leaf(int leaf) const;
 
-    long long get_path_read_count()  const { return path_read_count; }
-    long long get_path_write_count() const { return path_write_count; }
-    long long get_node_read_count()  const { return node_read_count; }
-    long long get_node_write_count() const { return node_write_count; }
+    long long get_seek_count()  const { return seek_count; }
+    long long get_bytes_read()  const { return bytes_read; }
+    long long get_bytes_written() const { return bytes_written; }
+    long long get_bandwidth() const { return bytes_read + bytes_written; }
     void reset_counts() {
-        path_read_count = path_write_count = 0;
-        node_read_count = node_write_count = 0;
+        seek_count = bytes_read = bytes_written = 0;
     }
 };

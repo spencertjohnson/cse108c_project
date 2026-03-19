@@ -47,6 +47,29 @@ public:
     int get_N() const { return N; }
     int get_L() const { return L; }
 
+    // aggregate counters across all internal ORAMs + meta_oram
+    long long get_seek_count() const {
+        long long total = meta_oram->get_seek_count();
+        for (const auto& o : orams) total += o.get_seek_count();
+        return total;
+    }
+    long long get_bytes_read() const {
+        long long total = meta_oram->get_bytes_read();
+        for (const auto& o : orams) total += o.get_bytes_read();
+        return total;
+    }
+    long long get_bytes_written() const {
+        long long total = meta_oram->get_bytes_written();
+        for (const auto& o : orams) total += o.get_bytes_written();
+        return total;
+    }
+    long long get_bandwidth() const { return get_bytes_read() + get_bytes_written(); }
+
+    void reset_counts() {
+        meta_oram->reset_counts();
+        for (auto& o : orams) o.reset_counts();
+    }
+
 private:
     int N;           // number of primitive blocks
     int L;           // log2(N), max height

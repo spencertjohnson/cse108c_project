@@ -5,7 +5,9 @@
 #include <stdexcept>
 #include <filesystem>
 
-PathORAM::PathORAM(int N_in, int block_size_in, const std::string& filename) : N(N_in), block_size(block_size_in) {
+PathORAM::PathORAM(int N_in, int block_size_in, const std::string& filename)
+    : N(N_in), block_size(block_size_in)
+{
     if (N <= 0)          throw std::invalid_argument("N must be > 0");
     if (block_size <= 0) throw std::invalid_argument("block_size must be > 0");
 
@@ -37,29 +39,20 @@ PathORAM::PathORAM(int N_in, int block_size_in, const std::string& filename) : N
     tree_file->flush();
 }
 
-
 PathORAM::~PathORAM() {
     if (tree_file && tree_file->is_open())
         tree_file->close();
     std::filesystem::remove(tree_filename);
 }
 
-
 int PathORAM::random_leaf() const {
     std::uniform_int_distribution<int> dist(0, num_leaves - 1);
     return dist(rng);
 }
 
-
 int PathORAM::node_at_level(int leaf, int level) const {
     return (num_leaves + leaf) >> (L - level);
 }
-
-
-// -------------------------------------------------------------------
-// Access
-// -------------------------------------------------------------------
-
 
 void PathORAM::access(int block_id, const uint8_t* data_in,
                       bool is_write, uint8_t* data_out) {
@@ -98,16 +91,7 @@ void PathORAM::access(int block_id, const uint8_t* data_in,
 
     for (int level = L; level >= 0; --level)
         write_bucket(node_at_level(x, level), x, level);
-
-    ++path_read_count;
-    ++path_write_count;
 }
-
-
-// -------------------------------------------------------------------
-// Bucket helpers
-// -------------------------------------------------------------------
-
 
 void PathORAM::read_bucket(int node_idx) {
     Bucket b = read_node(node_idx);
@@ -132,53 +116,48 @@ void PathORAM::write_bucket(int node_idx, int leaf_x, int level) {
     write_node(node_idx, b);
 }
 
-
-// -------------------------------------------------------------------
-// Disk I/O
-// -------------------------------------------------------------------
-
-
 Bucket PathORAM::read_node(int node_idx) const {
-    int dbs    = Bucket::disk_bucket_size(block_size);
+    int  dbs    = Bucket::disk_bucket_size(block_size);
     long offset = (long)(node_idx - 1) * dbs;
 
     tree_file->seekg(offset, std::ios::beg);
+    ++seek_count;
     if (!tree_file->good())
-        throw std::runtime_error("read_node: seek failed at node " + std::to_string(node_idx));
+        throw std::runtime_error("read_node: seek failed at node "
+                                 + std::to_string(node_idx));
 
     std::vector<uint8_t> buf(dbs);
     tree_file->read(reinterpret_cast<char*>(buf.data()), dbs);
     if (!tree_file->good())
-        throw std::runtime_error("read_node: read failed at node " + std::to_string(node_idx));
+        throw std::runtime_error("read_node: read failed at node "
+                                 + std::to_string(node_idx));
+
+    bytes_read += dbs;
 
     Bucket b(block_size);
     b.deserialize(buf.data(), block_size);
-    ++node_read_count;
     return b;
 }
 
 void PathORAM::write_node(int node_idx, const Bucket& b) {
-    int dbs     = Bucket::disk_bucket_size(block_size);
+    int  dbs    = Bucket::disk_bucket_size(block_size);
     long offset = (long)(node_idx - 1) * dbs;
 
     tree_file->seekp(offset, std::ios::beg);
+    ++seek_count;
     if (!tree_file->good())
-        throw std::runtime_error("write_node: seek failed at node " + std::to_string(node_idx));
+        throw std::runtime_error("write_node: seek failed at node "
+                                 + std::to_string(node_idx));
 
     std::vector<uint8_t> buf(dbs);
     b.serialize(buf.data(), block_size);
     tree_file->write(reinterpret_cast<char*>(buf.data()), dbs);
     if (!tree_file->good())
-        throw std::runtime_error("write_node: write failed at node " + std::to_string(node_idx));
+        throw std::runtime_error("write_node: write failed at node "
+                                 + std::to_string(node_idx));
 
-    ++node_write_count;
+    bytes_written += dbs;
 }
-
-
-// -------------------------------------------------------------------
-// Debug
-// -------------------------------------------------------------------
-
 
 void PathORAM::print_tree_structure() const {
     std::cout << "PathORAM N=" << N << " L=" << L

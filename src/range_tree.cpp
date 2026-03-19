@@ -11,6 +11,8 @@ RangeTree::RangeTree(int N_actual, int primitive_bs, const uint8_t* data, const 
     if (pbs <= 0)
         throw std::invalid_argument("primitive block size must be > 0");
 
+    rng = std::mt19937{std::random_device{}()};
+
     N = 1;
     while (N < N_actual)
         N <<= 1;
