@@ -12,7 +12,6 @@ DATA_DIR := data
 
 TARGET           := $(BIN_DIR)/oram
 BENCHMARK        := $(BIN_DIR)/benchmark
-VERIFY_LAYOUT    := $(BIN_DIR)/verify_layout
 PATHORAM_TARGET  := $(BIN_DIR)/oram_test
 
 # -----------------------------------------------------------------------
@@ -20,7 +19,7 @@ PATHORAM_TARGET  := $(BIN_DIR)/oram_test
 # -----------------------------------------------------------------------
 
 # Full build — PathORAM + rORAM
-COMMON_SRCS := $(SRC_DIR)/path_oram.cpp $(SRC_DIR)/r_oram.cpp
+COMMON_SRCS := $(SRC_DIR)/path_oram.cpp
 COMMON_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(COMMON_SRCS))
 
 # PathORAM only — rORAM excluded
