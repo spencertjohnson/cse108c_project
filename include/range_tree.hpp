@@ -51,6 +51,7 @@ private:
     int N;           // number of primitive blocks
     int L;           // log2(N), max height
     int pbs;         // primitive block size in bytes
+    mutable std::mt19937 rng;
 
     std::vector<PathORAM> orams;
     std::unique_ptr<PathORAM> meta_oram;
