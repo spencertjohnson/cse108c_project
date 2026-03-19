@@ -48,6 +48,8 @@ public:
     PathORAM& operator=(PathORAM&&) noexcept = default;
 
     void access(int block_id, const uint8_t* data, bool is_write, uint8_t *data_out);
+    void access_with_remap(int block_id, const uint8_t* data_in, bool is_write, uint8_t* data_out, int new_leaf);
+
 
     // functions for rORAM
     // ----------------------------------------------------------------
@@ -62,6 +64,7 @@ public:
     int get_position(int block_id) const { return position_map.at(block_id); }
 
 
+    void write_to_leaf(int block_id, int leaf, const uint8_t* data);
 
     // helper
     int node_at_level(int leaf, int level) const;

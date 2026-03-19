@@ -200,3 +200,76 @@ void PathORAM::write_node(int node_idx, const Bucket& b) {
 
     ++node_write_count;
 }
+
+
+void PathORAM::access_with_remap(int block_id, const uint8_t* data_in, bool is_write, uint8_t* data_out, int new_leaf) {
+    if (block_id < 0 || block_id >= N)
+        throw std::invalid_argument("block_id out of range");
+
+    // Line 1: look up current leaf
+    auto it = position_map.find(block_id);
+    int x = (it != position_map.end()) ? it->second : random_leaf();
+
+    // Line 2: remap to SPECIFIED leaf instead of random
+    position_map[block_id] = new_leaf;
+
+    // Lines 3-5: read path into stash
+    for (int level = 0; level <= L; ++level)
+        read_bucket(node_at_level(x, level));
+
+    // Line 6: read block from stash
+    if (data_out != nullptr)
+        std::memset(data_out, 0, BLOCK_SIZE);
+    for (Block& b : stash) {
+        if (b.id == block_id) {
+            if (data_out != nullptr)
+                std::memcpy(data_out, b.data, BLOCK_SIZE);
+            break;
+        }
+    }
+
+    // Lines 7-9: update if write
+    if (is_write) {
+        bool found = false;
+        for (Block& b : stash) {
+            if (b.id == block_id) {
+                std::memcpy(b.data, data_in, BLOCK_SIZE);
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            stash.emplace_back(block_id, data_in);
+    }
+
+    // Lines 10-15: write path back
+    for (int level = L; level >= 0; --level)
+        write_bucket(node_at_level(x, level), x, level);
+
+    ++path_read_count;
+    ++path_write_count;
+}
+
+
+void PathORAM::write_to_leaf(int block_id, int leaf, const uint8_t* data) {
+    // Set position
+    position_map[block_id] = leaf;
+
+    // Find the leaf node and write the block there directly
+    int node_idx = node_at_level(leaf, L);  // leaf level node
+
+    // Read current bucket at that node
+    Bucket b = read_node(node_idx);
+
+    // Find an empty slot and write the block
+    for (int i = 0; i < Z; ++i) {
+        if (b.blocks[i].is_dummy()) {
+            b.blocks[i] = Block(block_id, data);
+            write_node(node_idx, b);
+            return;
+        }
+    }
+
+    // Leaf bucket full — put in stash
+    stash.emplace_back(block_id, data);
+}

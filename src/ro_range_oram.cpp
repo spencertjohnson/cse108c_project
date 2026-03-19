@@ -30,94 +30,39 @@ ReadOnlyRangeORAM::~ReadOnlyRangeORAM() = default;
 
 
 void ReadOnlyRangeORAM::init_sub_oram(int i, const uint8_t* data) {
-    int super_block_size = 1 << i;  // 2^i blocks per super-block
-    int num_leaves       = sub_orams[i].get_num_leaves();
-
+    int super_size = 1 << i;
+    int num_leaves = sub_orams[i].get_num_leaves();
     std::uniform_int_distribution<int> dist(0, num_leaves - 1);
 
-    // Write each super-block as super_block_size individual PathORAM accesses
-    for (int start = 0; start < N; start += super_block_size) {
+    for (int start = 0; start < N; start += super_size) {
         int base_leaf = dist(rng);
-
-        for (int k = 0; k < super_block_size && start + k < N; ++k) {
-            int block_id = start + k;
-            int leaf     = (base_leaf + k) % num_leaves;
-
-            // Set position in PathORAM's position map
-            sub_orams[i].set_position(block_id, leaf);
-
-            // write block data
-            const uint8_t* block_data = data + (long)block_id * BLOCK_SIZE;
-            sub_orams[i].access(block_id, block_data, true, nullptr);
-
-            // store in our position map
-            rpm[i][block_id] = sub_orams[i].get_leaf(block_id);
+        for (int k = 0; k < super_size && start + k < N; ++k) {
+            int block_id         = start + k;
+            int leaf             = (base_leaf + k) % num_leaves;
+            const uint8_t* block = data + (long)block_id * BLOCK_SIZE;
+            // Write with specific leaf — maintains consecutive layout
+            sub_orams[i].access_with_remap(block_id, block, true, nullptr, leaf);
         }
     }
 }
 
-
 void ReadOnlyRangeORAM::read_super_block(int i, int a, uint8_t* out) {
-    PathORAM& oram    = sub_orams[i];
-    int super_size    = 1 << i;         // 2^i blocks
-    int L             = oram.get_L();
-    int num_leaves    = oram.get_num_leaves();
-    int start_leaf = sub_orams[i].get_position(a);
-
-    // Read level by level — at each level, super_size consecutive
-    // buckets are physically adjacent due to locality-sensitive mapping
-    // so we can read them all in one seek
-    std::vector<Block> found_blocks;
-
-    for (int level = 0; level <= L; ++level) {
-        int nodes_at_level = 1 << level;
-        int num_buckets    = std::min(super_size, nodes_at_level);
-        int start_pos      = start_leaf % nodes_at_level;
-
-        long offset = (long)(oram.node_at_level(start_leaf, level) - 1)
-                      * DISK_BUCKET_SIZE;
-
-        std::vector<uint8_t> buf(num_buckets * DISK_BUCKET_SIZE);
-        std::fstream& f = oram.get_file();
-        f.seekg(offset, std::ios::beg);
-        ++total_seeks;
-        f.read(reinterpret_cast<char*>(buf.data()),
-               num_buckets * DISK_BUCKET_SIZE);
-
-        // Scan all buckets at this level for blocks in our range
-        for (int b = 0; b < num_buckets; ++b) {
-            Bucket bucket;
-            bucket.deserialize(buf.data() + b * DISK_BUCKET_SIZE);
-            for (int k = 0; k < Z; ++k) {
-                const Block& blk = bucket.blocks[k];
-                if (!blk.is_dummy()) {
-                    // Check not already found (keep newest via position map)
-                    bool already = false;
-                    for (const Block& fb : found_blocks)
-                        if (fb.id == blk.id) { already = true; break; }
-                    if (!already)
-                        found_blocks.push_back(blk);
-                }
-            }
-        }
-    }
-
-    // Copy found blocks into output buffer in order
-    for (const Block& blk : found_blocks) {
-        // Compute offset within the super-block
-        // super-block starts at a0 which is start_leaf for R_i
-        int offset_in_sb = blk.id % super_size;
-        std::memcpy(out + (long)offset_in_sb * BLOCK_SIZE,
-                    blk.data, BLOCK_SIZE);
-    }
-
-    // Remap all blocks in this super-block (PathORAM invariant)
+    int super_size = 1 << i;
+    int num_leaves = sub_orams[i].get_num_leaves();
     std::uniform_int_distribution<int> dist(0, num_leaves - 1);
-    int new_base_leaf = dist(rng);
-    for (int k = 0; k < super_size; ++k) {
-        int block_id = (start_leaf / super_size) * super_size + k;
-        if (block_id < N)
-            oram.set_position(block_id, (new_base_leaf + k) % num_leaves);
+
+    // Pick new base leaf for consecutive remap
+    int new_base = dist(rng);
+
+    for (int k = 0; k < super_size && a + k < N; ++k) {
+        int block_id  = a + k;
+        int new_leaf  = (new_base + k) % num_leaves;
+        uint8_t block_out[BLOCK_SIZE];
+
+        // Read with specific new leaf — maintains consecutive layout
+        sub_orams[i].access_with_remap(block_id, nullptr, false,
+                                        block_out, new_leaf);
+        std::memcpy(out + (long)k * BLOCK_SIZE, block_out, BLOCK_SIZE);
     }
 }
 
