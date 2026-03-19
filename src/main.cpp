@@ -1,10 +1,9 @@
 #include "path_oram.hpp"
-// #include "r_oram.hpp"
+#include "ro_range_oram.hpp"
 #include <iostream>
-#include <cassert>
-#include <string>
 #include <vector>
 #include <cstring>
+#include <string>
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -33,205 +32,187 @@ static void fail(const std::string& name, const std::string& detail) {
         else { fail(name, detail); } \
     } while(0)
 
-// Helper: write a string into a BLOCK_SIZE buffer (zero-padded)
-static void str_to_buf(const std::string& s, uint8_t* buf) {
-    std::memset(buf, 0, BLOCK_SIZE);
-    std::memcpy(buf, s.c_str(), std::min(s.size(), (size_t)BLOCK_SIZE - 1));
+// Fill block with recognizable pattern — byte fill of (id & 0xFF)
+// with block id stored in first 4 bytes
+static void fill_block(uint8_t* buf, int block_id) {
+    std::memset(buf, block_id & 0xFF, BLOCK_SIZE);
+    std::memcpy(buf, &block_id, 4);
 }
 
-// Helper: read a string from a BLOCK_SIZE buffer
-static std::string buf_to_str(const uint8_t* buf) {
-    return std::string(reinterpret_cast<const char*>(buf));
+static bool check_block(const uint8_t* buf, int block_id) {
+    uint8_t expected[BLOCK_SIZE];
+    fill_block(expected, block_id);
+    return std::memcmp(buf, expected, BLOCK_SIZE) == 0;
+}
+
+static std::vector<uint8_t> make_init_data(int N) {
+    std::vector<uint8_t> data((long)N * BLOCK_SIZE);
+    for (int i = 0; i < N; ++i)
+        fill_block(data.data() + (long)i * BLOCK_SIZE, i);
+    return data;
 }
 
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
 
-// 1. Write/read many distinct blocks
-static void test_many_blocks(PathORAM& oram, int N) {
-    std::cout << "\n-- test_many_blocks (" << N << " blocks) --\n";
+// 1. Read single block (range=1) at several positions
+static void test_single_block(int N, int ell) {
+    std::cout << "\n-- test_single_block (N=" << N << ") --\n";
+    auto data = make_init_data(N);
+    ReadOnlyRangeORAM oram(N, ell, data.data(), "data/test_single");
 
-    uint8_t buf[BLOCK_SIZE];
+    std::vector<uint8_t> out(BLOCK_SIZE);
+    for (int i = 0; i < N; i += std::max(1, N/8)) {
+        oram.read(i, 1, out.data());
+        ASSERT_TRUE("single block " + std::to_string(i),
+                    check_block(out.data(), i),
+                    "block " + std::to_string(i) + " data mismatch");
+    }
+}
 
-    // Write phase
+// 2. Read aligned super-blocks of max size
+static void test_aligned_range(int N, int ell) {
+    std::cout << "\n-- test_aligned_range (N=" << N << ", r=2^ell=" << (1<<ell) << ") --\n";
+    auto data = make_init_data(N);
+    ReadOnlyRangeORAM oram(N, ell, data.data(), "data/test_aligned");
+
+    int r = 1 << ell;
+    std::vector<uint8_t> out((long)r * BLOCK_SIZE);
+
+    for (int start = 0; start + r <= N; start += r * 2) {
+        oram.read(start, r, out.data());
+        bool ok = true;
+        for (int k = 0; k < r; ++k) {
+            if (!check_block(out.data() + (long)k * BLOCK_SIZE, start + k)) {
+                ok = false;
+                fail("aligned block " + std::to_string(start + k), "mismatch");
+                break;
+            }
+        }
+        if (ok)
+            pass("aligned range start=" + std::to_string(start));
+    }
+}
+
+// 3. Read unaligned range
+static void test_unaligned_range(int N, int ell) {
+    std::cout << "\n-- test_unaligned_range --\n";
+    auto data = make_init_data(N);
+    ReadOnlyRangeORAM oram(N, ell, data.data(), "data/test_unaligned");
+
+    // start=3 is unaligned, r=3 is not a power of 2
+    int start = 3;
+    int r     = 3;
+    if (start + r > N) { std::cout << "   Skipping — N too small\n"; return; }
+
+    std::vector<uint8_t> out((long)r * BLOCK_SIZE);
+    oram.read(start, r, out.data());
+
+    for (int k = 0; k < r; ++k) {
+        ASSERT_TRUE("unaligned block " + std::to_string(start + k),
+                    check_block(out.data() + (long)k * BLOCK_SIZE, start + k),
+                    "mismatch");
+    }
+}
+
+// 4. Read every single block individually
+static void test_all_single(int N, int ell) {
+    std::cout << "\n-- test_all_single (N=" << N << ") --\n";
+    auto data = make_init_data(N);
+    ReadOnlyRangeORAM oram(N, ell, data.data(), "data/test_all_single");
+
+    std::vector<uint8_t> out(BLOCK_SIZE);
+    int failures = 0;
     for (int i = 0; i < N; ++i) {
-        str_to_buf("val_" + std::to_string(i), buf);
-        oram.access(i, buf, true, nullptr);
+        oram.read(i, 1, out.data());
+        if (!check_block(out.data(), i)) ++failures;
     }
+    ASSERT_TRUE("all " + std::to_string(N) + " blocks correct",
+                failures == 0,
+                std::to_string(failures) + " blocks had wrong data");
+}
 
-    // Read phase
-    for (int i = 0; i < N; ++i) {
-        uint8_t out[BLOCK_SIZE];
-        oram.access(i, nullptr, false, out);
-        std::string got = buf_to_str(out);
-        std::string expected = "val_" + std::to_string(i);
-        ASSERT_TRUE("many_blocks block " + std::to_string(i),
-                    got == expected,
-                    "expected \"" + expected + "\" got \"" + got + "\"");
+// 5. Repeated reads return consistent data
+static void test_repeated_reads(int N, int ell) {
+    std::cout << "\n-- test_repeated_reads --\n";
+    auto data = make_init_data(N);
+    ReadOnlyRangeORAM oram(N, ell, data.data(), "data/test_repeated");
+
+    std::vector<uint8_t> out(BLOCK_SIZE);
+    for (int trial = 0; trial < 10; ++trial) {
+        oram.read(0, 1, out.data());
+        ASSERT_TRUE("repeated read trial " + std::to_string(trial),
+                    check_block(out.data(), 0),
+                    "block 0 wrong on trial " + std::to_string(trial));
     }
 }
 
-// 2. Overwrite — write to same block twice, read should return latest value
-static void test_overwrite(PathORAM& oram) {
-    std::cout << "\n-- test_overwrite --\n";
+// 6. Range of size 2
+static void test_range_size_2(int N, int ell) {
+    std::cout << "\n-- test_range_size_2 --\n";
+    if (ell < 1) { std::cout << "   Skipping — ell < 1\n"; return; }
 
-    uint8_t buf[BLOCK_SIZE];
-    uint8_t out[BLOCK_SIZE];
+    auto data = make_init_data(N);
+    ReadOnlyRangeORAM oram(N, ell, data.data(), "data/test_range2");
 
-    str_to_buf("first", buf);
-    oram.access(0, buf, true, nullptr);
-
-    str_to_buf("second", buf);
-    oram.access(0, buf, true, nullptr);
-
-    oram.access(0, nullptr, false, out);
-    std::string got = buf_to_str(out);
-    ASSERT_TRUE("overwrite returns latest value",
-                got == "second",
-                "expected \"second\" got \"" + got + "\"");
-}
-
-// 3. Sequential access — access same block many times, value must persist
-static void test_sequential_access(PathORAM& oram) {
-    std::cout << "\n-- test_sequential_access --\n";
-
-    uint8_t buf[BLOCK_SIZE];
-    uint8_t out[BLOCK_SIZE];
-
-    str_to_buf("persistent", buf);
-    oram.access(5, buf, true, nullptr);
-
-    for (int i = 0; i < 20; ++i) {
-        oram.access(5, nullptr, false, out);
-        std::string got = buf_to_str(out);
-        ASSERT_TRUE("sequential read #" + std::to_string(i),
-                    got == "persistent",
-                    "expected \"persistent\" got \"" + got + "\"");
+    std::vector<uint8_t> out(2 * BLOCK_SIZE);
+    for (int start = 0; start + 2 <= N; start += 16) {
+        oram.read(start, 2, out.data());
+        ASSERT_TRUE("range2 start=" + std::to_string(start),
+                    check_block(out.data(), start) &&
+                    check_block(out.data() + BLOCK_SIZE, start + 1),
+                    "blocks " + std::to_string(start) + "," +
+                    std::to_string(start+1) + " mismatch");
     }
 }
 
-// 4. Write all blocks, read back in reverse order
-static void test_all_blocks(PathORAM& oram, int N) {
-    std::cout << "\n-- test_all_blocks (N=" << N << ") --\n";
+// 7. Range crosses super-block boundary
+static void test_cross_boundary(int N, int ell) {
+    std::cout << "\n-- test_cross_boundary --\n";
+    if (ell < 1) { std::cout << "   Skipping — ell < 1\n"; return; }
 
-    uint8_t buf[BLOCK_SIZE];
-    uint8_t out[BLOCK_SIZE];
+    auto data = make_init_data(N);
+    ReadOnlyRangeORAM oram(N, ell, data.data(), "data/test_cross");
 
-    std::vector<std::string> expected(N);
-    for (int i = 0; i < N; ++i) {
-        expected[i] = "block" + std::to_string(i);
-        str_to_buf(expected[i], buf);
-        oram.access(i, buf, true, nullptr);
+    int r     = 1 << ell;
+    int start = r - 1;  // starts one before boundary, crosses into next super-block
+    if (start + r > N) { std::cout << "   Skipping — N too small\n"; return; }
+
+    std::vector<uint8_t> out((long)r * BLOCK_SIZE);
+    oram.read(start, r, out.data());
+
+    bool ok = true;
+    for (int k = 0; k < r; ++k) {
+        if (!check_block(out.data() + (long)k * BLOCK_SIZE, start + k)) {
+            ok = false;
+            fail("cross-boundary block " + std::to_string(start + k), "mismatch");
+        }
     }
-
-    for (int i = N - 1; i >= 0; --i) {
-        oram.access(i, nullptr, false, out);
-        std::string got = buf_to_str(out);
-        ASSERT_TRUE("all_blocks read[" + std::to_string(i) + "]",
-                    got == expected[i],
-                    "expected \"" + expected[i] + "\" got \"" + got + "\"");
-    }
+    if (ok)
+        pass("cross-boundary range start=" + std::to_string(start));
 }
-
-// 5. Stash size should stay bounded across many accesses
-static void test_stash_bounded(PathORAM& oram, int N) {
-    std::cout << "\n-- test_stash_bounded --\n";
-
-    uint8_t buf[BLOCK_SIZE];
-
-    for (int i = 0; i < N; ++i) {
-        str_to_buf("data" + std::to_string(i), buf);
-        oram.access(i, buf, true, nullptr);
-    }
-
-    int max_stash = 0;
-    for (int round = 0; round < 5 * N; ++round) {
-        oram.access(round % N, nullptr, false, nullptr);
-        int s = oram.stash_size();
-        if (s > max_stash) max_stash = s;
-    }
-
-    ASSERT_TRUE("stash stays bounded (max=" + std::to_string(max_stash) + ")",
-                max_stash < N,
-                "stash grew to " + std::to_string(max_stash) + " >= N=" + std::to_string(N));
-}
-
-// 6. Position map remapping — block gets a new leaf after each access
-static void test_position_remap(PathORAM& oram) {
-    std::cout << "\n-- test_position_remap --\n";
-
-    uint8_t buf[BLOCK_SIZE];
-    str_to_buf("remap_test", buf);
-    oram.access(0, buf, true, nullptr);
-
-    int changes  = 0;
-    int trials   = 30;
-    int prev_leaf = oram.get_leaf(0);
-
-    for (int i = 0; i < trials; ++i) {
-        oram.access(0, nullptr, false, nullptr);
-        int new_leaf = oram.get_leaf(0);
-        if (new_leaf != prev_leaf) ++changes;
-        prev_leaf = new_leaf;
-
-        ASSERT_TRUE("remap leaf in range [trial " + std::to_string(i) + "]",
-                    new_leaf >= 0 && new_leaf < oram.num_leaves_count(),
-                    "leaf=" + std::to_string(new_leaf) + " out of range");
-    }
-
-    ASSERT_TRUE("position map remaps across accesses",
-                changes > 0,
-                "leaf never changed across " + std::to_string(trials) + " accesses");
-}
-
-// -----------------------------------------------------------------------
-// rORAM Tests (commented out until PathORAM is stable)
-// -----------------------------------------------------------------------
-
-// static void test_roram_single(rORAM& oram, int N) { ... }
-// static void test_roram_overwrite(rORAM& oram) { ... }
-// static void test_roram_range(rORAM& oram) { ... }
-// static void test_roram_cross_consistency(rORAM& oram) { ... }
 
 // -----------------------------------------------------------------------
 // Main
 // -----------------------------------------------------------------------
 
 int main() {
-    const int DEFAULT_N = 16;
+    const int N   = 64;
+    const int ell = 3;
 
-    int N = DEFAULT_N;
-    std::string line;
+    std::cout << "ReadOnlyRangeORAM correctness tests\n";
+    std::cout << "N=" << N << " ell=" << ell
+              << " max_range=" << (1 << ell) << "\n";
 
-    std::cout << "Enter number of blocks N [default " << DEFAULT_N << "]: ";
-    std::getline(std::cin, line);
-    if (!line.empty()) {
-        try { N = std::stoi(line); }
-        catch (...) {
-            std::cerr << "Invalid input for N, using default (" << DEFAULT_N << ").\n";
-            N = DEFAULT_N;
-        }
-    }
+    test_single_block(N, ell);
+    test_aligned_range(N, ell);
+    test_unaligned_range(N, ell);
+    test_all_single(N, ell);
+    test_repeated_reads(N, ell);
+    test_range_size_2(N, ell);
+    test_cross_boundary(N, ell);
 
-    std::cout << "Creating PathORAM tests with N=" << N << "\n";
-
-    // Each test gets a fresh PathORAM instance so state doesn't bleed between tests
-    { PathORAM oram(N, "data/test_many.bin");      test_many_blocks(oram, N); }
-    { PathORAM oram(N, "data/test_overwrite.bin"); test_overwrite(oram); }
-    { PathORAM oram(N, "data/test_seq.bin");       test_sequential_access(oram); }
-    { PathORAM oram(N, "data/test_all.bin");       test_all_blocks(oram, N); }
-    { PathORAM oram(N, "data/test_stash.bin");     test_stash_bounded(oram, N); }
-    { PathORAM oram(N, "data/test_pos.bin");       test_position_remap(oram); }
-
-    // rORAM tests — uncomment when PathORAM is stable
-    // int ell = 2;
-    // { rORAM oram(N, ell, "data/roram_single"); test_roram_single(oram, N); }
-    // { rORAM oram(N, ell, "data/roram_overwrite"); test_roram_overwrite(oram); }
-    // { rORAM oram(N, ell, "data/roram_range"); test_roram_range(oram); }
-    // { rORAM oram(N, ell, "data/roram_cross"); test_roram_cross_consistency(oram); }
-
-    // Summary
     std::cout << "\n============================\n";
     if (tests_passed == tests_run) {
         std::cout << GREEN << "ALL TESTS PASSED" << RESET

@@ -12,7 +12,6 @@ DATA_DIR := data
 
 TARGET           := $(BIN_DIR)/oram
 BENCHMARK        := $(BIN_DIR)/benchmark
-VERIFY_LAYOUT    := $(BIN_DIR)/verify_layout
 PATHORAM_TARGET  := $(BIN_DIR)/oram_test
 
 # -----------------------------------------------------------------------
