@@ -36,4 +36,9 @@ private:
     void init_sub_oram(int i, const uint8_t* data);
 
     void read_super_block(int i, int a, uint8_t* out);
+
+    std::vector<Block> scan_levels(int i, int a, int start_leaf, int super_size);
+    void read_level_chunk(int i, int level_base, int from, int count, int a, int super_size, std::vector<Block>& found);
+    void remap_super_block(int i, int a, int super_size, int new_base);
+    void evict_levels(int i, int start_leaf, int super_size);
 };

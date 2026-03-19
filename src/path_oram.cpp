@@ -251,6 +251,63 @@ void PathORAM::access_with_remap(int block_id, const uint8_t* data_in, bool is_w
 }
 
 
+void PathORAM::evict_level(int leaf, int level, int count) {
+    int nodes_at_level = 1 << level;
+    int start_pos      = leaf % nodes_at_level;
+    int level_base     = nodes_at_level;
+
+    std::vector<Bucket> buckets(count);
+
+    for (int k = 0; k < count; ++k) {
+        int node_leaf = (leaf + k) % num_leaves;
+
+        Bucket& b = buckets[k];
+        int slots = 0;
+        for (auto it = stash.begin(); it != stash.end() && slots < Z; ) {
+            auto pos_it = position_map.find(it->id);
+            if (pos_it == position_map.end()) { ++it; continue; }
+            if (node_at_level(pos_it->second, level) == 
+                node_at_level(node_leaf, level)) {
+                b.blocks[slots++] = *it;
+                it = stash.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // Write all buckets in one seek
+    std::vector<uint8_t> buf(count * DISK_BUCKET_SIZE);
+    for (int k = 0; k < count; ++k)
+        buckets[k].serialize(buf.data() + k * DISK_BUCKET_SIZE);
+
+    if (start_pos + count <= nodes_at_level) {
+        // No wraparound
+        long offset = (long)(level_base + start_pos - 1) * DISK_BUCKET_SIZE;
+        tree_file->seekp(offset, std::ios::beg);
+        ++seek_count;
+        tree_file->write(reinterpret_cast<char*>(buf.data()),
+                         count * DISK_BUCKET_SIZE);
+    } else {
+        // Wraparound — two writes
+        int first_part  = nodes_at_level - start_pos;
+        int second_part = count - first_part;
+
+        long offset1 = (long)(level_base + start_pos - 1) * DISK_BUCKET_SIZE;
+        tree_file->seekp(offset1, std::ios::beg);
+        ++seek_count;
+        tree_file->write(reinterpret_cast<char*>(buf.data()),
+                         first_part * DISK_BUCKET_SIZE);
+
+        long offset2 = (long)(level_base - 1) * DISK_BUCKET_SIZE;
+        tree_file->seekp(offset2, std::ios::beg);
+        ++seek_count;
+        tree_file->write(reinterpret_cast<char*>(buf.data() + first_part * DISK_BUCKET_SIZE),
+                         second_part * DISK_BUCKET_SIZE);
+    }
+}
+
+
 void PathORAM::write_to_leaf(int block_id, int leaf, const uint8_t* data) {
     // Set position
     position_map[block_id] = leaf;

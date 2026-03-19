@@ -3,7 +3,9 @@
 #include <cstring>
 #include <random>
 #include <stdexcept>
+#include <algorithm>
 #include <string>
+#include <iostream>
 
 
 ReadOnlyRangeORAM::ReadOnlyRangeORAM(int N_in, int ell_in, const uint8_t* data, const std::string& prefix)
@@ -46,24 +48,236 @@ void ReadOnlyRangeORAM::init_sub_oram(int i, const uint8_t* data) {
     }
 }
 
-void ReadOnlyRangeORAM::read_super_block(int i, int a, uint8_t* out) {
-    int super_size = 1 << i;
-    int num_leaves = sub_orams[i].get_num_leaves();
-    std::uniform_int_distribution<int> dist(0, num_leaves - 1);
 
-    // Pick new base leaf for consecutive remap
+void ReadOnlyRangeORAM::read_super_block(int i, int a, uint8_t* out) {
+    PathORAM& oram = sub_orams[i];
+    int super_size = 1 << i;
+    int num_leaves = oram.get_num_leaves();
+    int L          = oram.get_L();
+
+    int start_leaf = oram.get_position(a);
+    std::uniform_int_distribution<int> dist(0, num_leaves - 1);
     int new_base = dist(rng);
 
-    for (int k = 0; k < super_size && a + k < N; ++k) {
-        int block_id  = a + k;
-        int new_leaf  = (new_base + k) % num_leaves;
-        uint8_t block_out[BLOCK_SIZE];
+    // Check stash first
+    std::vector<Block> found;
+    auto& stash = oram.get_stash();
+    for (const Block& b : stash)
+        if (!b.is_dummy() && b.id >= a && b.id < a + super_size)
+            found.push_back(b);
 
-        // Read with specific new leaf — maintains consecutive layout
-        sub_orams[i].access_with_remap(block_id, nullptr, false,
-                                        block_out, new_leaf);
-        std::memcpy(out + (long)k * BLOCK_SIZE, block_out, BLOCK_SIZE);
+    // Remove in-range blocks from stash
+    stash.erase(std::remove_if(stash.begin(), stash.end(), [&](const Block& b) {
+        return b.id >= a && b.id < a + super_size;
+    }), stash.end());
+
+    // Read each level, extract in-range blocks, write bucket back with those slots cleared
+    for (int level = 0; level <= L; ++level) {
+        int nodes_at_level = 1 << level;
+        int num_buckets    = std::min(super_size, nodes_at_level);
+        int start_pos      = start_leaf % nodes_at_level;
+        int level_base     = nodes_at_level;
+
+        auto process_chunk = [&](int from, int count) {
+            long offset = (long)(level_base + from - 1) * DISK_BUCKET_SIZE;
+            std::vector<uint8_t> buf(count * DISK_BUCKET_SIZE);
+            std::fstream& f = oram.get_file();
+
+            f.seekg(offset, std::ios::beg);
+            ++total_seeks;
+            f.read(reinterpret_cast<char*>(buf.data()), count * DISK_BUCKET_SIZE);
+
+            bool modified = false;
+            for (int b = 0; b < count; ++b) {
+                Bucket bucket;
+                bucket.deserialize(buf.data() + b * DISK_BUCKET_SIZE);
+                for (int k = 0; k < Z; ++k) {
+                    Block& blk = bucket.blocks[k];
+                    if (blk.is_dummy()) continue;
+                    if (blk.id >= a && blk.id < a + super_size) {
+                        // Collect and clear this slot
+                        bool already = false;
+                        for (const Block& fb : found)
+                            if (fb.id == blk.id) { already = true; break; }
+                        if (!already) found.push_back(blk);
+                        blk = Block();  // mark as dummy
+                        modified = true;
+                    }
+                }
+                if (modified)
+                    bucket.serialize(buf.data() + b * DISK_BUCKET_SIZE);
+                modified = false;
+            }
+
+            // Write bucket back with in-range blocks cleared
+            f.seekp(offset, std::ios::beg);
+            ++total_seeks;
+            f.write(reinterpret_cast<char*>(buf.data()), count * DISK_BUCKET_SIZE);
+        };
+
+        if (start_pos + num_buckets <= nodes_at_level) {
+            process_chunk(start_pos, num_buckets);
+        } else {
+            int first_part  = nodes_at_level - start_pos;
+            int second_part = num_buckets - first_part;
+            process_chunk(start_pos, first_part);
+            process_chunk(0, second_part);
+        }
     }
+
+    // Copy to output
+    for (const Block& blk : found) {
+        int offset = blk.id - a;
+        if (offset >= 0 && offset < super_size)
+            std::memcpy(out + (long)offset * BLOCK_SIZE, blk.data, BLOCK_SIZE);
+    }
+
+    // Remap in-range blocks to new consecutive leaves
+    for (int k = 0; k < super_size && a + k < N; ++k)
+        oram.set_position(a + k, (new_base + k) % num_leaves);
+
+    // Push in-range blocks to stash and evict to new positions only
+    for (const Block& blk : found)
+        oram.get_stash().push_back(blk);
+
+    evict_levels(i, new_base, super_size);
+
+    oram.get_file().flush();
+}
+
+/*
+void ReadOnlyRangeORAM::read_super_block(int i, int a, uint8_t* out) {
+    PathORAM& oram = sub_orams[i];
+    int super_size = 1 << i;
+    int num_leaves = oram.get_num_leaves();
+
+    int start_leaf = oram.get_position(a);
+
+    std::uniform_int_distribution<int> dist(0, num_leaves - 1);
+    int new_base = dist(rng);
+
+    // Read level by level, collect in-range blocks
+    std::vector<Block> found = scan_levels(i, a, start_leaf, super_size);
+
+    // Copy to output
+    for (const Block& blk : found) {
+        int offset = blk.id - a;
+        if (offset >= 0 && offset < super_size)
+            std::memcpy(out + (long)offset * BLOCK_SIZE, blk.data, BLOCK_SIZE);
+    }
+
+    // Remap in-range blocks to new consecutive leaves
+    remap_super_block(i, a, super_size, new_base);
+
+    // Remove old copies of in-range blocks from stash
+    auto& stash = oram.get_stash();
+    stash.erase(
+        std::remove_if(stash.begin(), stash.end(), [&](const Block& b) {
+            return b.id >= a && b.id < a + super_size;
+        }),
+        stash.end()
+    );
+
+    // Push in-range blocks back to stash with new positions
+    for (const Block& blk : found)
+        oram.get_stash().push_back(blk);
+
+    // Evict along OLD paths first — handles non-range stash blocks
+    evict_levels(i, start_leaf, super_size);
+
+    // Evict along NEW paths — places in-range blocks at their new positions
+    evict_levels(i, new_base, super_size);
+
+    oram.get_file().flush();
+}
+*/
+
+
+// Scan stash and tree level by level, return all blocks in range [a, a+super_size)
+std::vector<Block> ReadOnlyRangeORAM::scan_levels(int i, int a, int start_leaf, int super_size) {
+    PathORAM& oram     = sub_orams[i];
+    int L              = oram.get_L();
+    int nodes_at_level, num_buckets, start_pos, level_base;
+
+    std::vector<Block> found;
+
+    // Check stash first
+    for (const Block& b : oram.get_stash())
+        if (!b.is_dummy() && b.id >= a && b.id < a + super_size)
+            found.push_back(b);
+
+    // Read each level
+    for (int level = 0; level <= L; ++level) {
+        nodes_at_level = 1 << level;
+        num_buckets    = std::min(super_size, nodes_at_level);
+        start_pos      = start_leaf % nodes_at_level;
+        level_base     = nodes_at_level;
+
+        if (start_pos + num_buckets <= nodes_at_level) {
+            read_level_chunk(i, level_base, start_pos, num_buckets, a, super_size, found);
+        } else {
+            int first_part  = nodes_at_level - start_pos;
+            int second_part = num_buckets - first_part;
+            read_level_chunk(i, level_base, start_pos, first_part,  a, super_size, found);
+            read_level_chunk(i, level_base, 0,          second_part, a, super_size, found);
+        }
+    }
+    return found;
+}
+
+// Read count buckets starting at from within a level, collect relevant blocks
+void ReadOnlyRangeORAM::read_level_chunk(int i, int level_base, int from, int count, int a, int super_size, std::vector<Block>& found) {
+    PathORAM& oram = sub_orams[i];
+    std::fstream& f = oram.get_file();
+
+    long offset = (long)(level_base + from - 1) * DISK_BUCKET_SIZE;
+    std::vector<uint8_t> buf(count * DISK_BUCKET_SIZE);
+    f.seekg(offset, std::ios::beg);
+    ++total_seeks;
+    f.read(reinterpret_cast<char*>(buf.data()), count * DISK_BUCKET_SIZE);
+
+    for (int b = 0; b < count; ++b) {
+        Bucket bucket;
+        bucket.deserialize(buf.data() + b * DISK_BUCKET_SIZE);
+        for (int k = 0; k < Z; ++k) {
+            const Block& blk = bucket.blocks[k];
+            if (blk.is_dummy()) continue;
+
+            bool in_range = (blk.id >= a && blk.id < a + super_size);
+            bool already  = false;
+            for (const Block& fb : found)
+                if (fb.id == blk.id) { already = true; break; }
+
+            if (in_range && !already) {
+                found.push_back(blk);
+            } else if (!in_range) {
+                bool in_stash = false;
+                for (const Block& s : oram.get_stash())
+                    if (s.id == blk.id) { in_stash = true; break; }
+                if (!in_stash)
+                    oram.get_stash().push_back(blk);
+            }
+        }
+    }
+}
+
+// Update position map and stash with new consecutive leaves
+void ReadOnlyRangeORAM::remap_super_block(int i, int a,
+                                           int super_size, int new_base) {
+    PathORAM& oram     = sub_orams[i];
+    int num_leaves     = oram.get_num_leaves();
+
+    for (int k = 0; k < super_size && a + k < N; ++k)
+        oram.set_position(a + k, (new_base + k) % num_leaves);
+}
+
+// Evict bottom-up level by level
+void ReadOnlyRangeORAM::evict_levels(int i, int start_leaf, int super_size) {
+    PathORAM& oram = sub_orams[i];
+    int L          = oram.get_L();
+
+    for (int level = L; level >= 0; --level)
+        oram.evict_level(start_leaf, level, std::min(super_size, 1 << level));
 }
 
 

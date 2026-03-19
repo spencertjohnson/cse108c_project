@@ -49,6 +49,7 @@ public:
 
     void access(int block_id, const uint8_t* data, bool is_write, uint8_t *data_out);
     void access_with_remap(int block_id, const uint8_t* data_in, bool is_write, uint8_t* data_out, int new_leaf);
+    void evict_level(int leaf, int level, int count);
 
 
     // functions for rORAM
