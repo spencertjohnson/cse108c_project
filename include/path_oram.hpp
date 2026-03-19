@@ -36,6 +36,7 @@ private:
     mutable long long path_write_count{0};
     mutable long long node_read_count{0};
     mutable long long node_write_count{0};
+    mutable long long seek_count{0};
 
     mutable std::mt19937 rng;
 
@@ -80,9 +81,11 @@ public:
     long long get_path_write_count() const { return (long long)path_write_count; }
     long long get_node_read_count() const { return node_read_count; }
     long long get_node_write_count() const { return node_write_count; }
+    long long get_seek_count() const { return seek_count; }
 
     void reset_counts() { 
         path_read_count = 0; path_write_count = 0; 
         node_read_count = 0; node_write_count = 0;
+        seek_count = 0;
     }
 };

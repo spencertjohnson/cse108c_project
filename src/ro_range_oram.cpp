@@ -24,3 +24,97 @@ ReadOnlyRangeORAM::ReadOnlyRangeORAM(int N_in, int ell_in, const uint8_t* data, 
         init_sub_oram(i, data);
     }
 }
+
+
+ReadOnlyRangeORAM::~ReadOnlyRangeORAM() = default;
+
+
+void ReadOnlyRangeORAM::init_sub_oram(int i, const uint8_t* data) {
+    int super_block_size = 1 << i;  // 2^i blocks per super-block
+    int num_leaves       = sub_orams[i].get_num_leaves();
+
+    std::uniform_int_distribution<int> dist(0, num_leaves - 1);
+
+    // Write each super-block as super_block_size individual PathORAM accesses
+    for (int start = 0; start < N; start += super_block_size) {
+        int base_leaf = dist(rng);
+
+        for (int k = 0; k < super_block_size && start + k < N; ++k) {
+            int block_id = start + k;
+            int leaf     = (base_leaf + k) % num_leaves;
+
+            // Set position in PathORAM's position map
+            sub_orams[i].set_position(block_id, leaf);
+
+            // write block data
+            const uint8_t* block_data = data + (long)block_id * BLOCK_SIZE;
+            sub_orams[i].access(block_id, block_data, true, nullptr);
+
+            // store in our position map
+            rpm[i][block_id] = sub_orams[i].get_leaf(block_id);
+        }
+    }
+}
+
+
+void ReadOnlyRangeORAM::read_super_block(int i, int a, uint8_t* out) {
+    int super_block_size = 1 << i;  // 2^i blocks
+
+    for (int k = 0; k < super_block_size && a + k < N; ++k) {
+        uint8_t block_out[BLOCK_SIZE];
+        sub_orams[i].access(a + k, nullptr, false, block_out);
+        std::memcpy(out + (long)k * BLOCK_SIZE, block_out, BLOCK_SIZE);
+    }
+}
+
+
+void ReadOnlyRangeORAM::read(int start_addr, int range, uint8_t* data_out) {
+    if (start_addr < 0 || start_addr + range > N)
+        throw std::out_of_range("range out of bounds");
+    if (range <= 0)
+        throw std::invalid_argument("range must be > 0");
+
+    // i = ceil(log2(range))
+    int i = (range > 1) ? (int)std::ceil(std::log2((double)range)) : 0;
+    if (i > ell)
+        throw std::invalid_argument("range exceeds max supported");
+
+    int super_block_size = 1 << i;  // 2^i
+
+    // a0 = aligned start address
+    int a0 = (start_addr / super_block_size) * super_block_size;
+    int a1 = (a0 + super_block_size) % N;
+
+    // Read both super-blocks
+    std::vector<uint8_t> buf0(super_block_size * BLOCK_SIZE);
+    std::vector<uint8_t> buf1(super_block_size * BLOCK_SIZE);
+
+    read_super_block(i, a0, buf0.data());
+    read_super_block(i, a1, buf1.data());
+
+    // Extract [start_addr, start_addr + range) from the two super-blocks
+    for (int k = 0; k < range; ++k) {
+        int addr       = start_addr + k;
+        uint8_t* src;
+        int      offset;
+
+        if (addr >= a0 && addr < a0 + super_block_size) {
+            src    = buf0.data();
+            offset = addr - a0;
+        } else {
+            src    = buf1.data();
+            offset = addr - a1;
+        }
+
+        std::memcpy(data_out + (long)k * BLOCK_SIZE,
+                    src + (long)offset * BLOCK_SIZE,
+                    BLOCK_SIZE);
+    }
+}
+
+
+void ReadOnlyRangeORAM::reset_counts() {
+    total_seeks = 0;
+    for (auto& oram : sub_orams)
+        oram.reset_counts();
+}
