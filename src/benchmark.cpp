@@ -10,7 +10,6 @@
 #include <filesystem>
 #include <cstring>
 #include "path_oram.hpp"
-#include "r_oram.hpp"
 
 using namespace std;
 using namespace std::chrono;
@@ -86,60 +85,6 @@ PathTrialResult run_single_trial_path(int N, int r, int num_ops,
         oram.get_path_write_count(),
         oram.get_node_read_count(),
         oram.get_node_write_count()
-    };
-}
-
-// -----------------------------------------------------------------------
-// rORAM trial
-// -----------------------------------------------------------------------
-
-rORAMTrialResult run_single_trial_roram(int N, int r, int ell, int num_ops, const string& trial_name) {
-    cerr << "    Creating rORAM...\n";
-    rORAM oram(N, ell, "data/" + trial_name + "_roram");
-    cerr << "    rORAM created\n";
-
-    int chunk = 1 << ell;
-    cerr << "    Filling with chunk=" << chunk << "\n";
-    for (int i = 0; i < N; i += chunk) {
-        cerr << "    Writing chunk at i=" << i << "\n";
-        std::vector<uint8_t> chunk_buf(chunk * BLOCK_SIZE, 0);
-        for (int k = 0; k < chunk && i + k < N; ++k)
-            std::memset(chunk_buf.data() + k * BLOCK_SIZE, (i + k) & 0xFF, BLOCK_SIZE);
-        oram.access(i, chunk, chunk_buf.data(), true, nullptr);
-    }
-    cerr << "    Fill complete\n";
-
-    oram.reset_counts();
-
-    std::mt19937 rng{std::random_device{}()};
-    std::uniform_int_distribution<int> dist(0, N - r);
-
-    vector<double> latencies;
-    latencies.reserve(num_ops);
-
-    std::vector<uint8_t> out(r * BLOCK_SIZE);
-    auto start_all = high_resolution_clock::now();
-
-    for (int op = 0; op < num_ops; ++op) {
-        int start_addr = dist(rng);
-        auto t0 = high_resolution_clock::now();
-        oram.access(start_addr, r, nullptr, false, out.data());
-        auto t1 = high_resolution_clock::now();
-        latencies.push_back(duration_cast<microseconds>(t1 - t0).count() / 1000.0);
-    }
-
-    auto end_all = high_resolution_clock::now();
-    double total_sec = duration_cast<microseconds>(end_all - start_all).count() / 1000000.0;
-
-    double sum = 0;
-    for (double d : latencies) sum += d;
-
-    return {
-        sum / num_ops,
-        *min_element(latencies.begin(), latencies.end()),
-        *max_element(latencies.begin(), latencies.end()),
-        num_ops / total_sec,
-        oram.get_total_seeks()
     };
 }
 
@@ -256,13 +201,6 @@ int main() {
             p_results.push_back(
                 run_single_trial_path(N, r, num_ops, trial_name));
             filesystem::remove("data/" + trial_name + "_path.bin");
-
-            cout << "    rORAM...\n";
-            r_results.push_back(
-                run_single_trial_roram(N, r, ell, num_ops, trial_name));
-            for (int j = 0; j <= ell; ++j)
-                filesystem::remove("data/" + trial_name + "_roram_sub_"
-                                   + to_string(j) + ".bin");
         }
 
         report_comparison(N, r, p_results, r_results);
