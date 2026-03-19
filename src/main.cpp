@@ -6,9 +6,6 @@
 #include <vector>
 #include <cstring>
 
-// -----------------------------------------------------------------------
-// Test constants
-// -----------------------------------------------------------------------
 static constexpr int TEST_BS = 64;  // smaller block size for range tree tests
 
 // -----------------------------------------------------------------------
@@ -35,7 +32,7 @@ static void fail(const std::string& name, const std::string& detail) {
 #define ASSERT_TRUE(name, cond, detail) \
     do { \
         if (cond) pass(name); \
-        else      fail(name, detail); \
+        else fail(name, detail); \
     } while(0)
 
 static void str_to_buf(const std::string& s, uint8_t* buf, int bs) {
@@ -61,11 +58,9 @@ static void test_many_blocks(PathORAM& oram, int N) {
     for (int i = 0; i < N; ++i) {
         std::vector<uint8_t> out(TEST_BS);
         oram.access(i, nullptr, false, out.data());
-        std::string got      = buf_to_str(out.data());
+        std::string got = buf_to_str(out.data());
         std::string expected = "val_" + std::to_string(i);
-        ASSERT_TRUE("many_blocks block " + std::to_string(i),
-                    got == expected,
-                    "expected \"" + expected + "\" got \"" + got + "\"");
+        ASSERT_TRUE("many_blocks block " + std::to_string(i), got == expected, "expected \"" + expected + "\" got \"" + got + "\"");
     }
 }
 
@@ -78,9 +73,7 @@ static void test_overwrite(PathORAM& oram) {
     oram.access(0, buf.data(), true, nullptr);
     oram.access(0, nullptr, false, out.data());
     std::string got = buf_to_str(out.data());
-    ASSERT_TRUE("overwrite returns latest value",
-                got == "second",
-                "expected \"second\" got \"" + got + "\"");
+    ASSERT_TRUE("overwrite returns latest value", got == "second", "expected \"second\" got \"" + got + "\"");
 }
 
 static void test_sequential_access(PathORAM& oram) {
@@ -91,9 +84,7 @@ static void test_sequential_access(PathORAM& oram) {
     for (int i = 0; i < 20; ++i) {
         oram.access(5, nullptr, false, out.data());
         std::string got = buf_to_str(out.data());
-        ASSERT_TRUE("sequential read #" + std::to_string(i),
-                    got == "persistent",
-                    "expected \"persistent\" got \"" + got + "\"");
+        ASSERT_TRUE("sequential read #" + std::to_string(i), got == "persistent", "expected \"persistent\" got \"" + got + "\"");
     }
 }
 
@@ -138,8 +129,8 @@ static void test_position_remap(PathORAM& oram) {
     std::vector<uint8_t> buf(TEST_BS);
     str_to_buf("remap_test", buf.data(), TEST_BS);
     oram.access(0, buf.data(), true, nullptr);
-    int changes   = 0;
-    int trials    = 30;
+    int changes = 0;
+    int trials = 30;
     int prev_leaf = oram.get_leaf(0);
     for (int i = 0; i < trials; ++i) {
         oram.access(0, nullptr, false, nullptr);
@@ -163,8 +154,7 @@ static void test_position_remap(PathORAM& oram) {
 static std::vector<uint8_t> make_test_data(int N, int bs) {
     std::vector<uint8_t> data((long)N * bs, 0);
     for (int i = 0; i < N; ++i)
-        str_to_buf("block_" + std::to_string(i),
-                   data.data() + (long)i * bs, bs);
+        str_to_buf("block_" + std::to_string(i), data.data() + (long)i * bs, bs);
     return data;
 }
 
@@ -174,7 +164,7 @@ static void test_rt_single_blocks(RangeTree& rt, int N, int bs) {
     std::vector<uint8_t> out(bs);
     for (int i = 0; i < N; ++i) {
         rt.access(i, i, out.data());
-        std::string got      = buf_to_str(out.data());
+        std::string got = buf_to_str(out.data());
         std::string expected = "block_" + std::to_string(i);
         ASSERT_TRUE("single block [" + std::to_string(i) + "]",
                     got == expected,
@@ -192,7 +182,7 @@ static void test_rt_aligned_ranges(RangeTree& rt, int N, int bs) {
         std::vector<uint8_t> out((long)rsize * bs);
         rt.access(0, rsize - 1, out.data());
         for (int k = 0; k < rsize; ++k) {
-            std::string got      = buf_to_str(out.data() + (long)k * bs);
+            std::string got = buf_to_str(out.data() + (long)k * bs);
             std::string expected = "block_" + std::to_string(k);
             ASSERT_TRUE("aligned range size=" + std::to_string(rsize)
                         + " block[" + std::to_string(k) + "]",
@@ -216,7 +206,7 @@ static void test_rt_straddling_ranges(RangeTree& rt, int N, int bs) {
         std::vector<uint8_t> out((long)len * bs);
         rt.access(s, t, out.data());
         for (int k = 0; k < len; ++k) {
-            std::string got      = buf_to_str(out.data() + (long)k * bs);
+            std::string got = buf_to_str(out.data() + (long)k * bs);
             std::string expected = "block_" + std::to_string(s + k);
             ASSERT_TRUE("straddle [" + std::to_string(s) + ","
                         + std::to_string(t) + "] block[" + std::to_string(k) + "]",
@@ -232,7 +222,7 @@ static void test_rt_full_range(RangeTree& rt, int N, int bs) {
     std::vector<uint8_t> out((long)N * bs);
     rt.access(0, N - 1, out.data());
     for (int k = 0; k < N; ++k) {
-        std::string got      = buf_to_str(out.data() + (long)k * bs);
+        std::string got = buf_to_str(out.data() + (long)k * bs);
         std::string expected = "block_" + std::to_string(k);
         ASSERT_TRUE("full_range block[" + std::to_string(k) + "]",
                     got == expected,

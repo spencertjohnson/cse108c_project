@@ -49,9 +49,9 @@ void RangeTree::build(const uint8_t* data, int N_actual) {
 
     // Heights 1..L: each super-block = left child concatenated with right child
     for (int i = 1; i <= L; ++i) {
-        int num_sb    = N >> i;
+        int num_sb = N >> i;
         int child_size = (1 << (i - 1)) * pbs;
-        int sb_size    = 2 * child_size;
+        int sb_size = 2 * child_size;
         height_data[i].resize(num_sb);
         for (int j = 0; j < num_sb; ++j) {
             height_data[i][j].resize(sb_size);
@@ -102,8 +102,8 @@ void RangeTree::find_super_blocks(int s, int t, int height, int& addr1, int& add
         offset += (N >> k);
 
     int num_sb = N >> height;
-    int sb1    = s >> height;
-    int sb2    = t >> height;
+    int sb1 = s >> height;
+    int sb2 = t >> height;
 
     addr1 = sb1;
     addr2 = (sb1 == sb2) ? -1 : sb2;
@@ -119,9 +119,7 @@ void RangeTree::find_super_blocks(int s, int t, int height, int& addr1, int& add
         ++accesses;
 
         // Access sb2's meta node if different, else dummy
-        int meta_idx2 = (sb1 != sb2)
-                        ? offset + sb2
-                        : offset + ((sb1 + 1) % num_sb);
+        int meta_idx2 = (sb1 != sb2) ? offset + sb2 : offset + ((sb1 + 1) % num_sb);
         meta_oram->access(meta_idx2, nullptr, false, buf.data());
         ++accesses;
 

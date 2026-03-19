@@ -8,12 +8,12 @@
 PathORAM::PathORAM(int N_in, int block_size_in, const std::string& filename)
     : N(N_in), block_size(block_size_in)
 {
-    if (N <= 0)          throw std::invalid_argument("N must be > 0");
+    if (N <= 0) throw std::invalid_argument("N must be > 0");
     if (block_size <= 0) throw std::invalid_argument("block_size must be > 0");
 
-    L          = (N > 1) ? (int)std::ceil(std::log2((double)N)) : 1;
+    L = (N > 1) ? (int)std::ceil(std::log2((double)N)) : 1;
     num_leaves = 1 << L;
-    num_nodes  = 2 * num_leaves - 1;
+    num_nodes = 2 * num_leaves - 1;
 
     rng = std::mt19937{std::random_device{}()};
 
@@ -54,8 +54,7 @@ int PathORAM::node_at_level(int leaf, int level) const {
     return (num_leaves + leaf) >> (L - level);
 }
 
-void PathORAM::access(int block_id, const uint8_t* data_in,
-                      bool is_write, uint8_t* data_out) {
+void PathORAM::access(int block_id, const uint8_t* data_in, bool is_write, uint8_t* data_out) {
     if (block_id < 0 || block_id >= N)
         throw std::invalid_argument("block_id out of range");
 
@@ -117,20 +116,18 @@ void PathORAM::write_bucket(int node_idx, int leaf_x, int level) {
 }
 
 Bucket PathORAM::read_node(int node_idx) const {
-    int  dbs    = Bucket::disk_bucket_size(block_size);
+    int  dbs = Bucket::disk_bucket_size(block_size);
     long offset = (long)(node_idx - 1) * dbs;
 
     tree_file->seekg(offset, std::ios::beg);
     ++seek_count;
     if (!tree_file->good())
-        throw std::runtime_error("read_node: seek failed at node "
-                                 + std::to_string(node_idx));
+        throw std::runtime_error("read_node: seek failed at node " + std::to_string(node_idx));
 
     std::vector<uint8_t> buf(dbs);
     tree_file->read(reinterpret_cast<char*>(buf.data()), dbs);
     if (!tree_file->good())
-        throw std::runtime_error("read_node: read failed at node "
-                                 + std::to_string(node_idx));
+        throw std::runtime_error("read_node: read failed at node " + std::to_string(node_idx));
 
     bytes_read += dbs;
 
@@ -140,21 +137,19 @@ Bucket PathORAM::read_node(int node_idx) const {
 }
 
 void PathORAM::write_node(int node_idx, const Bucket& b) {
-    int  dbs    = Bucket::disk_bucket_size(block_size);
+    int  dbs = Bucket::disk_bucket_size(block_size);
     long offset = (long)(node_idx - 1) * dbs;
 
     tree_file->seekp(offset, std::ios::beg);
     ++seek_count;
     if (!tree_file->good())
-        throw std::runtime_error("write_node: seek failed at node "
-                                 + std::to_string(node_idx));
+        throw std::runtime_error("write_node: seek failed at node " + std::to_string(node_idx));
 
     std::vector<uint8_t> buf(dbs);
     b.serialize(buf.data(), block_size);
     tree_file->write(reinterpret_cast<char*>(buf.data()), dbs);
     if (!tree_file->good())
-        throw std::runtime_error("write_node: write failed at node "
-                                 + std::to_string(node_idx));
+        throw std::runtime_error("write_node: write failed at node " + std::to_string(node_idx));
 
     bytes_written += dbs;
 }

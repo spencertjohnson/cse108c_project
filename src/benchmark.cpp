@@ -10,9 +10,9 @@
 // -----------------------------------------------------------------------
 // Config
 // -----------------------------------------------------------------------
-static constexpr int BENCH_BS      = 64;    // primitive block size in bytes
-static constexpr int BENCH_N       = 64;    // number of blocks (power of 2)
-static constexpr int QUERIES       = 20;    // queries per range size (averaged)
+static constexpr int BENCH_BS = 64;    // primitive block size in bytes
+static constexpr int BENCH_N = 256;    // number of blocks (power of 2)
+static constexpr int QUERIES = 20;    // queries per range size (averaged)
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -22,21 +22,20 @@ static std::vector<uint8_t> make_data(int N, int bs) {
     std::vector<uint8_t> d((long)N * bs, 0);
     for (int i = 0; i < N; ++i) {
         std::string s = "block_" + std::to_string(i);
-        std::memcpy(d.data() + (long)i * bs, s.c_str(),
-                    std::min(s.size(), (size_t)bs - 1));
+        std::memcpy(d.data() + (long)i * bs, s.c_str(),std::min(s.size(), (size_t)bs - 1));
     }
     return d;
 }
 
 using Clock = std::chrono::high_resolution_clock;
-using Ms    = std::chrono::duration<double, std::milli>;
+using Ms = std::chrono::duration<double, std::milli>;
 
 // -----------------------------------------------------------------------
 // Benchmark structs
 // -----------------------------------------------------------------------
 
 struct Result {
-    int    len;
+    int len;
     double rt_seeks;
     double rt_bandwidth_kb;
     double rt_latency_ms;
@@ -51,8 +50,7 @@ struct Result {
 // Run
 // -----------------------------------------------------------------------
 
-static Result benchmark_range(int N, int bs, int len, int queries,
-                               const std::vector<uint8_t>& data) {
+static Result benchmark_range(int N, int bs, int len, int queries, const std::vector<uint8_t>& data) {
     Result r;
     r.len = len;
 
@@ -66,10 +64,10 @@ static Result benchmark_range(int N, int bs, int len, int queries,
 
         std::vector<uint8_t> out((long)len * bs);
         long long total_seeks = 0, total_bw = 0;
-        double    total_ms    = 0.0;
+        double    total_ms = 0.0;
 
         for (int q = 0; q < queries; ++q) {
-            int s = (max_start > 0) ? (q * 7 % max_start) : 0; // deterministic spread
+            int s = (max_start > 0) ? (q * 7 % max_start) : 0;
             int t = s + len - 1;
 
             rt.reset_counts();
@@ -78,21 +76,20 @@ static Result benchmark_range(int N, int bs, int len, int queries,
             auto t1 = Clock::now();
 
             total_seeks += rt.get_seek_count();
-            total_bw    += rt.get_bandwidth();
-            total_ms    += Ms(t1 - t0).count();
+            total_bw += rt.get_bandwidth();
+            total_ms += Ms(t1 - t0).count();
         }
 
-        r.rt_seeks        = (double)total_seeks  / queries;
-        r.rt_bandwidth_kb = (double)total_bw     / queries / 1024.0;
-        r.rt_latency_ms   = total_ms             / queries;
-        r.rt_qps          = 1000.0 / r.rt_latency_ms;
+        r.rt_seeks = (double)total_seeks / queries;
+        r.rt_bandwidth_kb = (double)total_bw / queries / 1024.0;
+        r.rt_latency_ms = total_ms / queries;
+        r.rt_qps = 1000.0 / r.rt_latency_ms;
     }
 
     // ---- PathORAM (len individual accesses) ----
     {
         PathORAM oram(N, bs, "data/bench_po");
 
-        // write data in first
         std::vector<uint8_t> buf(bs);
         for (int i = 0; i < N; ++i) {
             std::memcpy(buf.data(), data.data() + (long)i * bs, bs);
@@ -101,7 +98,7 @@ static Result benchmark_range(int N, int bs, int len, int queries,
 
         std::vector<uint8_t> out(bs);
         long long total_seeks = 0, total_bw = 0;
-        double    total_ms    = 0.0;
+        double total_ms = 0.0;
 
         for (int q = 0; q < queries; ++q) {
             int s = (max_start > 0) ? (q * 7 % max_start) : 0;
@@ -113,14 +110,14 @@ static Result benchmark_range(int N, int bs, int len, int queries,
             auto t1 = Clock::now();
 
             total_seeks += oram.get_seek_count();
-            total_bw    += oram.get_bandwidth();
-            total_ms    += Ms(t1 - t0).count();
+            total_bw += oram.get_bandwidth();
+            total_ms += Ms(t1 - t0).count();
         }
 
-        r.po_seeks        = (double)total_seeks  / queries;
-        r.po_bandwidth_kb = (double)total_bw     / queries / 1024.0;
-        r.po_latency_ms   = total_ms             / queries;
-        r.po_qps          = 1000.0 / r.po_latency_ms;
+        r.po_seeks = (double)total_seeks / queries;
+        r.po_bandwidth_kb = (double)total_bw / queries / 1024.0;
+        r.po_latency_ms = total_ms / queries;
+        r.po_qps = 1000.0 / r.po_latency_ms;
     }
 
     return r;
@@ -170,7 +167,6 @@ static void print_table(const std::vector<Result>& results) {
     }
     std::cout << std::string(105, '-') << "\n";
 
-    // Summary: seeks ratio
     std::cout << "\nSeek ratio (PathORAM / RangeTree) — should grow with len:\n";
     for (const auto& r : results) {
         double ratio = (r.rt_seeks > 0) ? r.po_seeks / r.rt_seeks : 0.0;
@@ -193,7 +189,6 @@ int main() {
 
     auto data = make_data(N, bs);
 
-    // Range sizes to test: 1, 2, 4, 8, ... up to N
     std::vector<Result> results;
     for (int len = 1; len <= N; len <<= 1)
         results.push_back(benchmark_range(N, bs, len, QUERIES, data));

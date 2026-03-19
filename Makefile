@@ -18,11 +18,9 @@ PATHORAM_TARGET  := $(BIN_DIR)/oram_test
 # Sources
 # -----------------------------------------------------------------------
 
-# Full build — PathORAM + range tree
 COMMON_SRCS := $(SRC_DIR)/path_oram.cpp $(SRC_DIR)/range_tree.cpp
 COMMON_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(COMMON_SRCS))
 
-# PathORAM only — range tree excluded
 PATHORAM_SRCS := $(SRC_DIR)/path_oram.cpp
 PATHORAM_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(PATHORAM_SRCS))
 
