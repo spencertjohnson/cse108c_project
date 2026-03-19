@@ -32,20 +32,41 @@ ReadOnlyRangeORAM::~ReadOnlyRangeORAM() = default;
 
 
 void ReadOnlyRangeORAM::init_sub_oram(int i, const uint8_t* data) {
-    int super_size = 1 << i;
-    int num_leaves = sub_orams[i].get_num_leaves();
-    std::uniform_int_distribution<int> dist(0, num_leaves - 1);
+    PathORAM& oram    = sub_orams[i];
+    int super_size    = 1 << i;
+    int num_leaves    = oram.get_num_leaves();
+    int num_groups    = num_leaves / super_size;
+    int num_sb        = (N + super_size - 1) / super_size;
 
-    for (int start = 0; start < N; start += super_size) {
-        int base_leaf = dist(rng);
-        for (int k = 0; k < super_size && start + k < N; ++k) {
-            int block_id         = start + k;
-            int leaf             = (base_leaf + k) % num_leaves;
-            const uint8_t* block = data + (long)block_id * BLOCK_SIZE;
-            // Write with specific leaf — maintains consecutive layout
-            sub_orams[i].access_with_remap(block_id, block, true, nullptr, leaf);
+    std::uniform_int_distribution<int> dist(0, num_groups - 1);
+    std::fstream& f = oram.get_file();
+
+    for (int sb = 0; sb < num_sb; ++sb) {
+        int a         = sb * super_size;
+        int base_leaf = dist(rng) * super_size;
+
+        for (int k = 0; k < super_size; ++k) {
+            int block_id = a + k;
+            if (block_id >= N) break;
+
+            int leaf = base_leaf + k;
+            oram.set_position(block_id, leaf);
+
+            Bucket b;
+            b.blocks[0].id = block_id;
+            std::memcpy(b.blocks[0].data,
+                        data + (long)block_id * BLOCK_SIZE,
+                        BLOCK_SIZE);
+
+            int  node   = num_leaves + leaf;
+            long offset = (long)(node - 1) * DISK_BUCKET_SIZE;
+            uint8_t buf[DISK_BUCKET_SIZE];
+            b.serialize(buf);
+            f.seekp(offset, std::ios::beg);
+            f.write(reinterpret_cast<char*>(buf), DISK_BUCKET_SIZE);
         }
     }
+    f.flush();
 }
 
 
