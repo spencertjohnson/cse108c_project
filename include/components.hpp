@@ -1,69 +1,61 @@
 #pragma once
 #include <cstring>
+#include <vector>
 
-#define BLOCK_SIZE 4096
 #define Z 4
 
-static constexpr int MAX_TAGS = 16;
-
-// [ id: 4 bytes | data: BLOCK_SIZE bytes | tags: MAX_TAGS*4 bytes ]
-static constexpr int DISK_BLOCK_SIZE = 4 + BLOCK_SIZE + MAX_TAGS * 4;
-static constexpr int DISK_BUCKET_SIZE = Z * DISK_BLOCK_SIZE;
-
 struct Block {
-    int id;
-    uint8_t data[BLOCK_SIZE];
-    int tags[MAX_TAGS];
+    int id = -1;
+    std::vector<uint8_t> data;
 
-    // Dummy block
-    Block()
-        : id(-1) {
-            std::memset(data, 0, BLOCK_SIZE);
-            std::memset(tags, 0, sizeof(tags));
-        }
+    Block() = default;
 
-    // Real PATH ORAM block
-    Block(int id_, const uint8_t * data_) : id(id_) {
-        std::memcpy(data, data_, BLOCK_SIZE);
-        std::memset(tags, 0, sizeof(tags));
-    }
+    explicit Block(int block_size)
+        : id(-1), data(block_size, 0) {}
 
-    //Read rORAM block
-    Block(int id_, const uint8_t * data_, const int * tags_) : id(id_) {
-        std::memcpy(data, data_, BLOCK_SIZE);
-        std::memset(tags, 0, sizeof(tags));
-        std::memcpy(tags, tags_, MAX_TAGS * 4);
-    }
+    Block(int id_, const uint8_t* data_, int block_size)
+        : id(id_), data(data_, data_ + block_size) {}
 
     bool is_dummy() const { return id == -1; }
 
-    void serialize(uint8_t* buf) const {
-        std::memcpy(buf,                         &id,       4);
-        std::memcpy(buf + 4,                      data,     BLOCK_SIZE);
-        std::memcpy(buf + 4 + BLOCK_SIZE, tags, MAX_TAGS * 4);
-
+    void serialize(uint8_t* buf, int block_size) const {
+        std::memcpy(buf, &id, 4);
+        if (!data.empty())
+            std::memcpy(buf + 4, data.data(), block_size);
+        else
+            std::memset(buf + 4, 0, block_size);
     }
 
-    void deserialize(const uint8_t* buf) {
-        std::memcpy(&id,   buf,                   4);
-        std::memcpy( data, buf + 4,               BLOCK_SIZE);
-        std::memcpy( tags, buf + 4 + BLOCK_SIZE,  MAX_TAGS * 4);
+    void deserialize(const uint8_t* buf, int block_size) {
+        std::memcpy(&id, buf, 4);
+        data.assign(buf + 4, buf + 4 + block_size);
     }
 };
 
-class Bucket {
-public:
-    Block blocks[Z];
+struct Bucket {
+    std::vector<Block> blocks;
 
     Bucket() = default;
 
-    void serialize(uint8_t* buf) const {
+    explicit Bucket(int block_size) {
+        blocks.reserve(Z);
         for (int i = 0; i < Z; ++i)
-            blocks[i].serialize(buf + i * DISK_BLOCK_SIZE);
+            blocks.emplace_back(block_size);
     }
 
-    void deserialize(const uint8_t* buf) {
+    void serialize(uint8_t* buf, int block_size) const {
+        int dbs = disk_block_size(block_size);
         for (int i = 0; i < Z; ++i)
-            blocks[i].deserialize(buf + i * DISK_BLOCK_SIZE);
+            blocks[i].serialize(buf + i * dbs, block_size);
     }
+
+    void deserialize(const uint8_t* buf, int block_size) {
+        int dbs = disk_block_size(block_size);
+        blocks.resize(Z);
+        for (int i = 0; i < Z; ++i)
+            blocks[i].deserialize(buf + i * dbs, block_size);
+    }
+
+    static int disk_block_size(int block_size) { return 4 + block_size; }
+    static int disk_bucket_size(int block_size) { return Z * disk_block_size(block_size); }
 };
