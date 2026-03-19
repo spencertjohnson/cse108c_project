@@ -33,8 +33,6 @@ RangeTree::RangeTree(int N_actual, int primitive_bs, const uint8_t* data, const 
     build(data, N_actual);
 }
 
-RangeTree::~RangeTree() = default;
-
 void RangeTree::build(const uint8_t* data, int N_actual) {
     std::vector<std::vector<std::vector<uint8_t>>> height_data(L + 1);
 
